@@ -1,0 +1,7 @@
+node_modules
+node_modules.archive
+dist
+e2e-output
+*.tsbuildinfo
+.DS_Store
+*.log

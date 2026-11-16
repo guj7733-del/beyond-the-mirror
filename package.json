@@ -1,0 +1,39 @@
+{
+  "name": "beyond-the-mirror",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Webcam-driven avatar fatigue prototype (Research through Design)",
+  "scripts": {
+    "dev": "vite",
+    "dev:lan": "vite --mode lan --host",
+    "dev:lan:http": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "inspect-model": "node scripts/inspect-model.mjs",
+    "setup-assets": "node scripts/setup-assets.mjs",
+    "postinstall": "node scripts/setup-assets.mjs",
+    "check:e2e": "node scripts/e2e-check.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.2.0",
+    "@pixiv/three-vrm": "3.5.5",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/three": "0.180.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}
