@@ -64,27 +64,9 @@ body,
 }
 
 .composite {
-  position: relative;
   display: block;
   width: 100%;
   height: 100%;
-  background: #000;
-}
-
-.pip-video {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  pointer-events: none;
-}
-
-.pip-button {
-  position: absolute;
-  left: 12px;
-  bottom: 17%;
-  min-height: 44px;
 }
 
 .phone-overlay {

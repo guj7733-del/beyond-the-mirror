@@ -12,14 +12,8 @@ export function App() {
     if (!host) return;
     const c = engine.compositor.canvas;
     c.className = 'composite';
-    const cameraVideo = engine.camera.video;
-    cameraVideo.className = 'pip-video';
-    cameraVideo.setAttribute('aria-hidden', 'true');
-    const pipVideo = engine.pictureInPicture.video;
-    host.prepend(cameraVideo, pipVideo, c);
+    host.prepend(c);
     return () => {
-      cameraVideo.remove();
-      pipVideo.remove();
       c.remove();
     };
   }, []);
@@ -31,7 +25,6 @@ export function App() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
       if (k === ' ') {
-        if (t?.closest('button')) return;
         e.preventDefault();
         engine.toggleExperiment();
       } else if (k === 'r') engine.resetExperiment();
@@ -50,15 +43,6 @@ export function App() {
 
   const cam = ui.camera;
   const stage = STAGES[ui.experiment.stage];
-  const pip = ui.pictureInPicture;
-  const pipNeedsAvatar = ui.settings.condition !== 'A';
-  const pipAvatarReady = ui.tracker.status === 'ready' && (ui.avatar.status === 'ready' || ui.avatar.placeholder);
-  const pipWaitingForAvatar = pipNeedsAvatar && !pipAvatarReady;
-  const pipLabel = pip === 'active' ? '关闭画中画'
-    : pip === 'opening' ? '正在打开画中画…'
-    : pipWaitingForAvatar ? '等待面捕与 Avatar'
-    : pip === 'preparing' ? '准备画中画…'
-    : '打开画中画';
   return (
     <div className={`app ${ui.panelVisible ? '' : 'presenting'}`}>
       <main className="stage">
@@ -77,17 +61,6 @@ export function App() {
           )}
           {ui.avatar.status === 'loading' && <div className="chip info">模型加载中 {Math.round(ui.avatar.progress * 100)}%</div>}
           {ui.recording.active && <div className="chip rec">● REC {ui.recording.seconds.toFixed(0)}s</div>}
-          {cam.status === 'on' && pip !== 'unavailable' && pip !== 'idle' && (
-            <button
-              className="btn pip-button"
-              type="button"
-              onClick={() => void engine.pictureInPicture.toggle()}
-              disabled={pip === 'opening' || (pip !== 'active' && pipWaitingForAvatar)}
-              aria-pressed={pip === 'active'}
-            >
-              {pipLabel}
-            </button>
-          )}
         </div>
         {!ui.panelVisible && (
           <div className="present-hint">
