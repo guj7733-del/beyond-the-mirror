@@ -324,7 +324,7 @@ export class Engine {
     this.toast('已恢复默认设置。');
   }
 
-  /** 切换版本：A 右下角半身 / B 头部叠在脸上。两个版本共用同一套 9:16 画面和界面。 */
+  /** 切换版本：A 右下角半身 / B 头部叠在脸上。 */
   setVersion(v: Version): void {
     this.updateSettings({ version: v, condition: v === 'A' ? 'A' : 'B' });
     this.toast(v === 'B' ? '版本 B：Avatar 只有头部，叠在用户脸上。' : '版本 A：Avatar 半身在画面右下角。');
@@ -333,7 +333,7 @@ export class Engine {
   /** 选择实验条件。C 复用头部 Avatar 构图，但隐藏真人摄像头画面。 */
   setCondition(condition: Condition): void {
     this.updateSettings({ condition, version: condition === 'A' ? 'A' : 'B' });
-    const labels = { A: 'Self-view：看自己', B: 'Self + Avatar：真人 + Avatar', C: 'Avatar Only：仅 Avatar' };
+    const labels = { A: 'TikTok + Avatar：视频 + 右下角角色', B: 'Self + Avatar：真人 + Avatar', C: 'Avatar Only：仅 Avatar' };
     this.toast(`条件 ${condition}：${labels[condition]}`);
   }
 
@@ -534,9 +534,9 @@ export class Engine {
     }
     const d = new Date();
     this.compositor.draw({
-      video: this.camera.active && s.condition !== 'C' ? this.camera.video : null,
+      video: this.camera.active && s.condition === 'B' ? this.camera.video : null,
       mirror: s.tracking.mirror,
-      background: s.condition === 'C' ? 'dark' : s.background,
+      background: s.condition === 'A' ? 'transparent' : s.condition === 'C' ? 'dark' : s.background,
       cameraZoom: s.cameraZoom,
       autoFrame: s.autoFrame,
       faceFraction: headMode ? 0.3 : 0.4,
@@ -544,7 +544,7 @@ export class Engine {
       avatar: this.avatar && !headMode ? this.renderer.canvas : null,
       avatarRect: rect,
       headOverlay,
-      chrome: s.chrome,
+      chrome: headMode && s.chrome,
       clock: `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`,
       dt,
     });

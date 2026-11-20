@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { engine, useUi } from './ui/engine';
 import { ControlPanel } from './ui/ControlPanel';
+import { TikTokFeed } from './ui/TikTokFeed';
 import { STAGES } from './fatigue/stages';
 
 export function App() {
@@ -43,16 +44,18 @@ export function App() {
 
   const cam = ui.camera;
   const stage = STAGES[ui.experiment.stage];
+  const showTikTok = ui.settings.condition === 'A';
   return (
     <div className={`app ${ui.panelVisible ? '' : 'presenting'}`}>
       <main className="stage">
         <div className="phone" ref={stageRef}>
-          {cam.status !== 'on' && ui.settings.background === 'camera' && (
-            <div className="phone-overlay">
-              <button className="btn primary big" onClick={() => engine.startCamera()} disabled={cam.status === 'starting'}>
+          {showTikTok && <TikTokFeed />}
+          {cam.status !== 'on' && (showTikTok || ui.settings.background === 'camera') && (
+            <div className={`phone-overlay${showTikTok ? ' phone-overlay-corner' : ''}`}>
+              <button className={`btn primary${showTikTok ? '' : ' big'}`} onClick={() => engine.startCamera()} disabled={cam.status === 'starting'}>
                 {cam.status === 'starting' ? '正在开启摄像头…' : 'Start Camera 开启摄像头'}
               </button>
-              <p className="privacy">画面只在本机浏览器内处理，不上传、不保存。</p>
+              {!showTikTok && <p className="privacy">画面只在本机浏览器内处理，不上传、不保存。</p>}
               {cam.error && <p className="err">{cam.error}</p>}
             </div>
           )}

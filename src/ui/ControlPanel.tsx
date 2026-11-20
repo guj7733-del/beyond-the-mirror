@@ -67,8 +67,8 @@ export function ControlPanel({ ui }: { ui: UiState }) {
       </header>
 
       <div className="version-switch" role="group" aria-label="实验条件">
-        <button className={`btn ${s.condition === 'A' ? 'active' : ''}`} onClick={() => engine.setCondition('A')} title="Self-view：显示真人摄像头画面">
-          <b>A · Self-view</b><span>看自己</span>
+        <button className={`btn ${s.condition === 'A' ? 'active' : ''}`} onClick={() => engine.setCondition('A')} title="播放 TikTok，右下角显示 Avatar">
+          <b>A · TikTok + Avatar</b><span>视频 + 角色</span>
         </button>
         <button className={`btn ${s.condition === 'B' ? 'active' : ''}`} onClick={() => engine.setCondition('B')} title="Self + Avatar：真人与 Avatar 同时显示">
           <b>B · Self + Avatar</b><span>真人 + Avatar</span>
@@ -185,9 +185,9 @@ export function ControlPanel({ ui }: { ui: UiState }) {
         {cam.error && <p className="err">{cam.error}</p>}
         <div className="row wrap">
           <Toggle label="镜像" checked={s.tracking.mirror} onChange={(v) => setTracking({ mirror: v })} />
-          <Toggle label="自动大脸构图" checked={s.autoFrame} onChange={(v) => engine.updateSettings({ autoFrame: v })} />
+          {isB && <Toggle label="自动大脸构图" checked={s.autoFrame} onChange={(v) => engine.updateSettings({ autoFrame: v })} />}
         </div>
-        <Slider label="画面缩放" value={s.cameraZoom} min={1} max={2.5} step={0.05} onChange={(v) => engine.updateSettings({ cameraZoom: v })} />
+        {isB && <Slider label="画面缩放" value={s.cameraZoom} min={1} max={2.5} step={0.05} onChange={(v) => engine.updateSettings({ cameraZoom: v })} />}
       </Section>
 
       <Section title="角色 Avatar" sub={ui.avatar.status === 'ready' ? ui.avatar.name : ui.avatar.status === 'loading' ? '加载中' : ''}>
@@ -300,23 +300,29 @@ export function ControlPanel({ ui }: { ui: UiState }) {
             导出六阶段立绘
           </button>
         </div>
-        <p className="hint">录制的是左侧 9:16 画面（1080×1920，30fps），浏览器支持时为 MP4，否则为 WebM。</p>
-        <div className="row wrap">
-          <span className="muted">背景</span>
-          {(
-            [
-              ['camera', '摄像头'],
-              ['dark', '深色'],
-              ['green', '绿幕'],
-              ['transparent', '透明'],
-            ] as [BackgroundMode, string][]
-          ).map(([k, label]) => (
-            <button key={k} className={`btn small ${s.background === k ? 'active' : ''}`} onClick={() => engine.updateSettings({ background: k })}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <Toggle label="显示短视频界面元素" checked={s.chrome} onChange={(v) => engine.updateSettings({ chrome: v })} />
+        <p className="hint">
+          {isB ? '录制左侧 9:16 画面（1080×1920，30fps），浏览器支持时为 MP4，否则为 WebM。' : '截图和录制仅采集角色画布。需要同时录下 TikTok 和角色时，请使用系统录屏。'}
+        </p>
+        {isB && (
+          <>
+            <div className="row wrap">
+              <span className="muted">背景</span>
+              {(
+                [
+                  ['camera', '摄像头'],
+                  ['dark', '深色'],
+                  ['green', '绿幕'],
+                  ['transparent', '透明'],
+                ] as [BackgroundMode, string][]
+              ).map(([k, label]) => (
+                <button key={k} className={`btn small ${s.background === k ? 'active' : ''}`} onClick={() => engine.updateSettings({ background: k })}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <Toggle label="显示短视频界面元素" checked={s.chrome} onChange={(v) => engine.updateSettings({ chrome: v })} />
+          </>
+        )}
       </Section>
 
       <Section title="调试 Debug" open={false}>

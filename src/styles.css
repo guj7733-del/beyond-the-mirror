@@ -63,14 +63,74 @@ body,
   height: calc(100vh - 56px);
 }
 
+.tiktok-feed,
+.tiktok-player,
 .composite {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
 }
 
+.tiktok-feed {
+  overflow: hidden auto;
+  overscroll-behavior-y: contain;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+}
+
+.tiktok-slide {
+  position: relative;
+  height: 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.tiktok-player {
+  border: 0;
+}
+
+/* iframe 上方接收滑动，底部保留 TikTok 的播放控件。 */
+.tiktok-scroll-surface {
+  position: absolute;
+  inset: 0 0 64px;
+  touch-action: pan-y;
+}
+
+.tiktok-playback-error {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 24px);
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  text-align: center;
+}
+
+.tiktok-playback-error p {
+  margin: 0 0 8px;
+  white-space: nowrap;
+}
+
+.tiktok-playback-error .row {
+  justify-content: center;
+}
+
+.tiktok-playback-error a {
+  text-decoration: none;
+}
+
+.composite {
+  z-index: 1;
+  pointer-events: none;
+}
+
 .phone-overlay {
   position: absolute;
+  z-index: 2;
   inset: 0;
   display: flex;
   flex-direction: column;
@@ -82,6 +142,20 @@ body,
   background: rgba(10, 10, 14, 0.35);
 }
 
+.phone-overlay-corner {
+  inset: 12px auto auto 12px;
+  align-items: flex-start;
+  padding: 0;
+  max-width: calc(100% - 24px);
+  text-align: left;
+  background: none;
+  pointer-events: none;
+}
+
+.phone-overlay-corner .btn {
+  pointer-events: auto;
+}
+
 .privacy {
   margin: 0;
   color: #d6d8e0;
@@ -91,6 +165,7 @@ body,
 
 .chip {
   position: absolute;
+  z-index: 2;
   top: 9%;
   left: 50%;
   transform: translateX(-50%);
@@ -609,7 +684,8 @@ progress {
     padding: 0;
     flex: none;
   }
-  .phone {
+  .phone,
+  .app.presenting .phone {
     height: auto;
     width: 100vw;
     border-radius: 0;
