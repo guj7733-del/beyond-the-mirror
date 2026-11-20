@@ -14,6 +14,7 @@ export interface CameraInfo {
 export class CameraController {
   readonly video: HTMLVideoElement;
   private stream: MediaStream | null = null;
+  private session = 0;
   status: CameraStatus = 'off';
   info: CameraInfo | null = null;
 
@@ -30,6 +31,10 @@ export class CameraController {
     return this.status === 'on';
   }
 
+  get mediaStream(): MediaStream | null {
+    return this.stream;
+  }
+
   async start(deviceId?: string): Promise<CameraInfo> {
     if (!window.isSecureContext) {
       throw new CameraError('insecure', '摄像头只能在 localhost 或 HTTPS 页面中使用。请用 npm run dev 打开 http://localhost:5173，或用 npm run dev:lan 走 HTTPS。');
@@ -38,6 +43,7 @@ export class CameraController {
       throw new CameraError('unsupported', '当前浏览器不支持摄像头接口（getUserMedia），请使用新版 Chrome / Edge / Safari。');
     }
     this.stop();
+    const session = this.session;
     this.status = 'starting';
     const video: MediaTrackConstraints = {
       width: { ideal: 1920 },
@@ -46,41 +52,49 @@ export class CameraController {
       facingMode: 'user',
     };
     if (deviceId) video.deviceId = { exact: deviceId };
+    let stream: MediaStream;
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+      stream = await navigator.mediaDevices.getUserMedia({ video, audio: false }).catch((err: DOMException) => {
+        if (err.name !== 'OverconstrainedError' || session !== this.session) throw err;
+        // 分辨率要求过高时退回默认约束，保留前摄偏好。
+        const fallback = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' };
+        return navigator.mediaDevices.getUserMedia({ video: fallback, audio: false });
+      });
     } catch (err) {
-      // 分辨率要求过高时退回默认约束再试一次
-      if ((err as DOMException)?.name === 'OverconstrainedError') {
-        this.stream = await navigator.mediaDevices
-          .getUserMedia({ video: deviceId ? { deviceId: { exact: deviceId } } : true, audio: false })
-          .catch((e) => {
-            this.status = 'error';
-            throw translateError(e);
-          });
-      } else {
-        this.status = 'error';
-        throw translateError(err);
-      }
+      if (session === this.session) this.status = 'error';
+      throw translateError(err);
     }
-    this.video.srcObject = this.stream;
+    if (session !== this.session) {
+      stream.getTracks().forEach((track) => track.stop());
+      throw new DOMException('Camera request superseded', 'AbortError');
+    }
+    this.stream = stream;
+    this.video.srcObject = stream;
     await this.video.play().catch(() => undefined);
     await waitForVideo(this.video);
-    const track = this.stream.getVideoTracks()[0];
-    const st = track?.getSettings?.() ?? {};
+    if (session !== this.session) throw new DOMException('Camera request superseded', 'AbortError');
+    const track = stream.getVideoTracks()[0];
+    if (track?.readyState !== 'live') {
+      this.stop();
+      this.status = 'error';
+      throw new CameraError('busy', '摄像头已中断，请重新开启。');
+    }
+    const st = track.getSettings();
     this.info = {
-      label: track?.label || '摄像头',
+      label: track.label || '摄像头',
       width: this.video.videoWidth || st.width || 0,
       height: this.video.videoHeight || st.height || 0,
       deviceId: st.deviceId,
     };
-    track?.addEventListener('ended', () => {
-      this.status = 'off';
-    });
+    track.addEventListener('ended', () => {
+      if (this.stream === stream) this.stop();
+    }, { once: true });
     this.status = 'on';
     return this.info;
   }
 
   stop(): void {
+    this.session++;
     if (this.stream) {
       for (const t of this.stream.getTracks()) t.stop();
     }

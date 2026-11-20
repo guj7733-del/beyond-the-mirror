@@ -11,7 +11,8 @@ import { Avatar, type AvatarOptions } from '../avatar/Avatar';
 import { createOverlayTextures, type OverlayTextures } from '../avatar/textures';
 import { OVERLAY_TEXTURE_OVERRIDES } from '../config/overlayTextures';
 import { AvatarRenderer } from '../render/AvatarRenderer';
-import { Compositor, type HeadOverlayInput } from '../render/Compositor';
+import { Compositor, type CompositeInput, type HeadOverlayInput } from '../render/Compositor';
+import { PictureInPicture, type PictureInPictureStatus } from '../render/PictureInPicture';
 import type { CapabilityReport } from '../avatar/capabilities';
 import { createPlaceholderSource } from '../avatar/Placeholder';
 import type { OverlayTuning } from '../avatar/FatigueOverlays';
@@ -43,6 +44,7 @@ export interface UiState {
   experiment: { running: boolean; time: number; autoStage: number; stage: number; manual: number | null; blend: number };
   renderFps: number;
   recording: { active: boolean; seconds: number; mime: string };
+  pictureInPicture: PictureInPictureStatus;
   live: { values: LiveValue[]; head: { yaw: number; pitch: number; roll: number } };
   models: ModelEntry[];
   panelVisible: boolean;
@@ -57,6 +59,7 @@ const LIVE_KEYS = [
 const BASE = import.meta.env.BASE_URL;
 /** 版本 B 头部画布的边长（像素）。 */
 const HEAD_PX = 1024;
+const PIP_FPS = 15;
 
 export class Engine {
   readonly store: Store<UiState>;
@@ -67,6 +70,7 @@ export class Engine {
   readonly fatigue = new FatigueController();
   readonly renderer = new AvatarRenderer();
   readonly compositor = new Compositor(1080, 1920);
+  readonly pictureInPicture: PictureInPicture;
   avatar: Avatar | null = null;
 
   private settings: Settings;
@@ -92,7 +96,14 @@ export class Engine {
   private exporting = false;
   private currentModelKey = '';
   private newVideoFrame = false;
-  private rvfcArmed = false;
+  private videoFrameCallback: number | null = null;
+  private lastVideoCallbackAt = -Infinity;
+  private cameraRequest = 0;
+  private readonly pipCompositor = new Compositor(480, 480);
+  private pipWorker: Worker | null = null;
+  private pipFrameTimer = 0;
+  private lastPipDraw = -Infinity;
+  private lastPipWorkerFrame = -Infinity;
 
   constructor() {
     this.settings = loadSettings();
@@ -104,6 +115,7 @@ export class Engine {
     }
     this.processor.update(this.settings.tracking);
     this.processor.setCalibration(this.settings.calibration);
+    this.pictureInPicture = new PictureInPicture(this.onPictureInPictureStatus, (message) => this.toast(message, 'error'));
     this.store = new Store<UiState>({
       settings: this.settings,
       camera: { status: 'off', error: null, label: '', size: '', devices: [], deviceId: '' },
@@ -112,6 +124,7 @@ export class Engine {
       experiment: { running: false, time: 0, autoStage: 0, stage: 0, manual: null, blend: 1 },
       renderFps: 0,
       recording: { active: false, seconds: 0, mime: '' },
+      pictureInPicture: this.pictureInPicture.status,
       live: { values: [], head: { yaw: 0, pitch: 0, roll: 0 } },
       models: [{ name: 'avatar.vrm（默认）', url: 'models/avatar.vrm' }],
       panelVisible: true,
@@ -128,6 +141,8 @@ export class Engine {
   start(): void {
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.loop);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
+    window.addEventListener('pagehide', this.onPageHide);
     void this.loadModelList();
     void this.loadModel(this.settings.modelUrl);
     void this.ensureTracker();
@@ -136,8 +151,10 @@ export class Engine {
 
   dispose(): void {
     cancelAnimationFrame(this.raf);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    window.removeEventListener('pagehide', this.onPageHide);
     this.stopRecording();
-    this.camera.stop();
+    this.stopCamera();
     this.tracker.close();
     this.avatar?.dispose();
     this.renderer.dispose();
@@ -177,19 +194,27 @@ export class Engine {
 
   async startCamera(deviceId?: string): Promise<void> {
     const id = deviceId ?? (this.store.get().camera.deviceId || undefined);
+    const request = ++this.cameraRequest;
+    this.pictureInPicture.clear();
+    this.cancelVideoFrameCallback();
     this.store.set((s) => ({ camera: { ...s.camera, status: 'starting', error: null } }));
     try {
       const info = await this.camera.start(id);
+      if (request !== this.cameraRequest) return;
       if (info.width > 0 && info.height > 0) this.processor.aspect = info.width / info.height;
       this.lastVideoTime = -1;
-      this.rvfcArmed = false;
       this.armVideoFrameCallback();
+      this.camera.mediaStream?.getVideoTracks()[0]?.addEventListener('ended', () => {
+        if (request === this.cameraRequest) this.stopCamera();
+      }, { once: true });
       this.store.set((s) => ({
         camera: { ...s.camera, status: 'on', error: null, label: info.label, size: `${info.width}×${info.height}`, deviceId: info.deviceId ?? s.camera.deviceId },
       }));
+      this.preparePictureInPicture();
       void this.refreshDevices();
       void this.ensureTracker();
     } catch (err) {
+      if (request !== this.cameraRequest) return;
       const msg = err instanceof CameraError ? err.message : `摄像头启动失败：${(err as Error)?.message ?? err}`;
       this.store.set((s) => ({ camera: { ...s.camera, status: 'error', error: msg } }));
       this.toast(msg, 'error');
@@ -198,18 +223,35 @@ export class Engine {
 
   /** 只在摄像头有新帧时做面捕（requestVideoFrameCallback），避免对同一帧重复检测。 */
   private armVideoFrameCallback(): void {
-    const v = this.camera.video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
-    if (!v.requestVideoFrameCallback || this.rvfcArmed) return;
-    this.rvfcArmed = true;
-    const cb = () => {
+    const video = this.camera.video;
+    if (!video.requestVideoFrameCallback || this.videoFrameCallback !== null || !this.camera.active) return;
+    this.videoFrameCallback = video.requestVideoFrameCallback(() => {
+      this.videoFrameCallback = null;
       this.newVideoFrame = true;
-      if (this.camera.active) v.requestVideoFrameCallback!(cb);
-      else this.rvfcArmed = false;
-    };
-    v.requestVideoFrameCallback(cb);
+      this.lastVideoCallbackAt = performance.now();
+      this.renderBackgroundPip();
+      this.armVideoFrameCallback();
+    });
+  }
+
+  private cancelVideoFrameCallback(): void {
+    if (this.videoFrameCallback !== null) this.camera.video.cancelVideoFrameCallback?.(this.videoFrameCallback);
+    this.videoFrameCallback = null;
+    this.newVideoFrame = false;
+    this.lastVideoCallbackAt = -Infinity;
+  }
+
+  private hasNewCameraFrame(now: number): boolean {
+    const video = this.camera.video;
+    // When Safari stops delivering frame callbacks, fall back to the video timeline.
+    return video.readyState >= 2 && (this.newVideoFrame ||
+      (now - this.lastVideoCallbackAt >= 250 && video.currentTime !== this.lastVideoTime));
   }
 
   stopCamera(): void {
+    this.cameraRequest++;
+    this.pictureInPicture.clear();
+    this.cancelVideoFrameCallback();
     this.camera.stop();
     this.store.set((s) => ({ camera: { ...s.camera, status: 'off', label: '', size: '' } }));
   }
@@ -218,6 +260,91 @@ export class Engine {
     if (this.camera.active || this.camera.status === 'starting') this.stopCamera();
     else void this.startCamera();
   }
+
+  private onPageHide = (): void => {
+    this.stopCamera();
+  };
+
+  private onVisibilityChange = (): void => {
+    if (!document.hidden && this.camera.active) {
+      if (this.camera.video.paused) void this.camera.video.play().catch(() => undefined);
+      this.armVideoFrameCallback();
+    }
+  };
+
+  // ————————————————— 画中画 —————————————————
+
+  private preparePictureInPicture(): void {
+    const stream = this.camera.mediaStream;
+    if (!this.camera.active || !stream) return;
+    this.pictureInPicture.prepare(stream, this.settings.condition === 'A' ? undefined : this.pipCompositor.canvas);
+  }
+
+  private onPictureInPictureStatus = (status: PictureInPictureStatus): void => {
+    this.store.set({ pictureInPicture: status });
+    if (status !== 'active' || !this.pictureInPicture.compositing) {
+      this.stopPictureInPictureFrames();
+      return;
+    }
+    const track = this.camera.mediaStream?.getVideoTracks()[0];
+    if (!track) return;
+    // These callbacks also cover browsers where a camera track cannot be transferred to a worker.
+    this.pipFrameTimer = window.setInterval(this.renderBackgroundPip, 1000 / PIP_FPS);
+    this.camera.video.addEventListener('timeupdate', this.onCameraTimeUpdate);
+    if (typeof VideoFrame === 'undefined' || typeof Worker === 'undefined') return;
+    const clone = track.clone();
+    let worker: Worker | undefined;
+    try {
+      worker = new Worker(new URL('../tracking/pictureInPictureFrames.worker.ts', import.meta.url), { type: 'module' });
+      worker.postMessage({ track: clone }, [clone]);
+    } catch {
+      clone.stop();
+      worker?.terminate();
+      return;
+    }
+    const cameraWorker = worker;
+    this.pipWorker = cameraWorker;
+    cameraWorker.onmessage = ({ data: frame }: MessageEvent<VideoFrame | null>) => {
+      try {
+        if (this.pipWorker !== cameraWorker) return;
+        if (!frame) {
+          this.pipWorker = null;
+          return;
+        }
+        this.lastPipWorkerFrame = performance.now();
+        this.renderBackgroundPip(frame);
+      } finally {
+        frame?.close();
+        if (frame && this.pipWorker === cameraWorker) cameraWorker.postMessage('next');
+      }
+    };
+    cameraWorker.onerror = () => {
+      if (this.pipWorker === cameraWorker) this.pipWorker = null;
+      cameraWorker.postMessage('stop');
+    };
+  };
+
+  private stopPictureInPictureFrames(): void {
+    window.clearInterval(this.pipFrameTimer);
+    this.camera.video.removeEventListener('timeupdate', this.onCameraTimeUpdate);
+    this.pipWorker?.postMessage('stop');
+    this.pipWorker = null;
+    this.lastPipWorkerFrame = -Infinity;
+  }
+
+  private onCameraTimeUpdate = (): void => this.renderBackgroundPip();
+
+  private renderBackgroundPip = (frame?: VideoFrame): void => {
+    if (!document.hidden || this.pictureInPicture.status !== 'active' || !this.pictureInPicture.compositing) return;
+    const track = this.camera.mediaStream?.getVideoTracks()[0];
+    if (!this.camera.active || !track || track.muted || track.readyState !== 'live') return;
+    const now = performance.now();
+    if (now - this.last < 1000 / PIP_FPS - 5) return;
+    if (!frame && now - this.lastPipWorkerFrame < 250) return;
+    if (frame || this.hasNewCameraFrame(now)) {
+      this.tick(now, frame);
+    }
+  };
 
   calibrate(): void {
     if (!this.store.get().tracker.face) {
@@ -300,6 +427,7 @@ export class Engine {
   // ————————————————— 设置 —————————————————
 
   updateSettings(patch: Partial<Settings>): void {
+    const previousCondition = this.settings.condition;
     const next: Settings = { ...this.settings, ...patch };
     if (patch.stageTimes) next.stageTimes = sanitizeStageTimes(patch.stageTimes, STAGES.length);
     if (patch.tracking) {
@@ -310,6 +438,7 @@ export class Engine {
     this.settings = next;
     saveSettings(next);
     this.store.set({ settings: next });
+    if (next.condition !== previousCondition) this.preparePictureInPicture();
     this.pushExperiment();
   }
 
@@ -321,6 +450,7 @@ export class Engine {
     this.processor.setCalibration(this.settings.calibration);
     saveSettings(this.settings);
     this.store.set({ settings: this.settings });
+    this.preparePictureInPicture();
     this.toast('已恢复默认设置。');
   }
 
@@ -444,6 +574,14 @@ export class Engine {
 
   private loop = (now: number): void => {
     this.raf = requestAnimationFrame(this.loop);
+    if (document.hidden && this.pictureInPicture.status === 'active' && this.pictureInPicture.compositing) {
+      this.renderBackgroundPip();
+      return;
+    }
+    this.tick(now);
+  };
+
+  private tick(now: number, frame?: VideoFrame): void {
     const dt = Math.min(0.1, Math.max(0, (now - this.last) / 1000));
     this.last = now;
     this.time += dt;
@@ -451,13 +589,15 @@ export class Engine {
 
     // 1) 面捕（只在有新视频帧时检测）
     const v = this.camera.video;
-    const fresh = this.rvfcArmed ? this.newVideoFrame : v.currentTime !== this.lastVideoTime;
-    if (this.camera.active && this.tracker.ready && v.readyState >= 2 && fresh) {
+    const fresh = frame || this.hasNewCameraFrame(now);
+    if (this.camera.active && this.tracker.ready && fresh) {
       this.lastVideoTime = v.currentTime;
       this.newVideoFrame = false;
+      if (frame && frame.displayHeight > 0) this.processor.aspect = frame.displayWidth / frame.displayHeight;
+      else if (v.videoHeight > 0) this.processor.aspect = v.videoWidth / v.videoHeight;
       const t0 = performance.now();
       try {
-        const raw = this.tracker.detect(v, now);
+        const raw = this.tracker.detect(frame ?? v, now);
         this.processor.process(raw, now);
       } catch (err) {
         console.warn('[FaceTracker] detect 失败', err);
@@ -482,7 +622,9 @@ export class Engine {
     const params = this.fatigue.update(dt);
 
     // 3) 角色
-    this.renderFrame(params, dt, fr.present || this.presence > 0.001 ? fr : null);
+    this.renderFrame(params, dt, fr.present || this.presence > 0.001 ? fr : null, frame);
+
+    if (document.hidden) return;
 
     // 4) 界面状态（10Hz）
     this.frames++;
@@ -510,9 +652,9 @@ export class Engine {
       }));
       if (this.camera.status === 'off' && this.store.get().camera.status === 'on') this.stopCamera();
     }
-  };
+  }
 
-  private renderFrame(params: FatigueParams, dt: number, face: typeof this.processor.frame | null): void {
+  private renderFrame(params: FatigueParams, dt: number, face: typeof this.processor.frame | null, frame?: VideoFrame): void {
     const s = this.settings;
     const headMode = s.condition !== 'A';
     if (this.avatar) {
@@ -523,7 +665,8 @@ export class Engine {
     const rect = this.compositor.avatarRectFor(s.layout);
     let headOverlay: HeadOverlayInput | null = null;
     if (headMode) {
-      this.renderer.setSize(HEAD_PX, HEAD_PX);
+      const headSize = document.hidden && this.pictureInPicture.compositing && !this.recorder ? 512 : HEAD_PX;
+      this.renderer.setSize(headSize, headSize);
       this.renderer.frameHead();
       this.renderer.render();
       if (this.avatar) headOverlay = this.headOverlayInput();
@@ -533,8 +676,8 @@ export class Engine {
       this.renderer.render();
     }
     const d = new Date();
-    this.compositor.draw({
-      video: this.camera.active && s.condition !== 'C' ? this.camera.video : null,
+    const input: CompositeInput = {
+      video: this.camera.active && s.condition !== 'C' ? frame ?? this.camera.video : null,
       mirror: s.tracking.mirror,
       background: s.condition === 'C' ? 'dark' : s.background,
       cameraZoom: s.cameraZoom,
@@ -547,7 +690,18 @@ export class Engine {
       chrome: s.chrome,
       clock: `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`,
       dt,
-    });
+    };
+    if (!document.hidden || !this.pictureInPicture.compositing || this.recorder) this.compositor.draw(input);
+    const now = performance.now();
+    if (this.pictureInPicture.compositing && now - this.lastPipDraw >= 1000 / PIP_FPS - 5) {
+      this.lastPipDraw = now;
+      this.pipCompositor.draw({
+        ...input,
+        background: s.condition === 'C' ? 'dark' : 'camera',
+        headOverlay: s.condition === 'C' && headOverlay ? { ...headOverlay, face: null } : headOverlay,
+        chrome: false,
+      });
+    }
   }
 
   /** 版本 B：头部画布 + 对齐信息。摄像头开着但没检测到人脸时淡出；摄像头关闭时放在画面中央。 */

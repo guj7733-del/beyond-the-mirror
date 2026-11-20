@@ -71,7 +71,7 @@ export class FaceTracker {
     return 'CPU';
   }
 
-  detect(video: HTMLVideoElement, nowMs: number): RawFace | null {
+  detect(video: HTMLVideoElement | VideoFrame, nowMs: number): RawFace | null {
     if (!this.landmarker) return null;
     // detectForVideo 要求时间戳严格递增
     const ts = nowMs <= this.lastTs ? this.lastTs + 1 : nowMs;

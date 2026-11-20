@@ -39,7 +39,7 @@ export type HeadPlacement = Placement;
 type Crop = CropInfo;
 
 export interface CompositeInput {
-  video: HTMLVideoElement | null;
+  video: HTMLVideoElement | VideoFrame | null;
   mirror: boolean;
   background: BackgroundMode;
   cameraZoom: number;
@@ -92,10 +92,12 @@ export class Compositor {
     const { ctx, width: W, height: H } = this;
     ctx.clearRect(0, 0, W, H);
     const v = i.video;
-    const hasVideo = !!v && v.readyState >= 2 && v.videoWidth > 0;
+    const isVideoElement = v instanceof HTMLVideoElement;
+    const vw = isVideoElement ? v.videoWidth : v?.displayWidth ?? 0;
+    const vh = isVideoElement ? v.videoHeight : v?.displayHeight ?? 0;
     // 裁切框每帧都更新（即使背景不是摄像头），这样版本 B 的头部在任何背景下都跟着脸走
-    this.lastCrop = hasVideo ? this.updateCrop(v!, i) : null;
-    if (i.background === 'camera' && hasVideo) this.drawVideo(v!, this.lastCrop!, i.mirror);
+    this.lastCrop = vw > 0 && vh > 0 && (!isVideoElement || v.readyState >= 2) ? this.updateCrop(vw, vh, i) : null;
+    if (i.background === 'camera' && v && this.lastCrop) this.drawVideo(v, this.lastCrop, i.mirror);
     else if (i.background === 'green') {
       ctx.fillStyle = '#00b140';
       ctx.fillRect(0, 0, W, H);
@@ -140,10 +142,8 @@ export class Compositor {
     return p;
   }
 
-  private updateCrop(v: HTMLVideoElement, i: CompositeInput): Crop {
+  private updateCrop(vw: number, vh: number, i: CompositeInput): Crop {
     const { width: W, height: H } = this;
-    const vw = v.videoWidth;
-    const vh = v.videoHeight;
     const aspect = W / H;
     // cover 裁切的基础尺寸
     let baseW = vw;
@@ -185,7 +185,7 @@ export class Compositor {
     return { sx, sy, sw, sh, vw, vh };
   }
 
-  private drawVideo(v: HTMLVideoElement, crop: Crop, mirror: boolean): void {
+  private drawVideo(v: HTMLVideoElement | VideoFrame, crop: Crop, mirror: boolean): void {
     const { ctx, width: W, height: H } = this;
     ctx.save();
     if (mirror) {
