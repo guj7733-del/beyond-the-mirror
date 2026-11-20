@@ -54,13 +54,22 @@ const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(e.message));
 // 用可点击的测试页面替代第三方播放器，避免网络和播放器脚本影响本地自检。
 await page.route('https://www.tiktok.com/player/v1/**', (route) => {
-  const blocked = new URL(route.request().url()).pathname.endsWith('/7706999381882785025');
+  const blocked = new URL(route.request().url()).pathname.endsWith('/7706917622683585844');
   const message = blocked
     ? { 'x-tiktok-player': true, type: 'onPlayerError', value: { errorCode: 3001 } }
     : { 'x-tiktok-player': true, type: 'onPlayerReady' };
+  const host = JSON.stringify(new URL(url).origin);
   return route.fulfill({
     contentType: 'text/html; charset=utf-8',
-    body: `<!doctype html><button style="position:absolute;bottom:12px;left:50%">播放</button><script>parent.postMessage(${JSON.stringify(message)}, ${JSON.stringify(new URL(url).origin)});</script>`,
+    body: `<!doctype html><button style="position:absolute;bottom:12px;left:50%">播放</button><script>
+      window.addEventListener('message', event => {
+        if (event.origin === ${host} && event.data?.['x-tiktok-player']) {
+          document.body.dataset.commands = (document.body.dataset.commands || '') + ' ' + event.data.type;
+        }
+      });
+      parent.postMessage(${JSON.stringify(message)}, ${host});
+      if (${!blocked}) parent.postMessage({ 'x-tiktok-player': true, type: 'onStateChange', value: 1 }, ${host});
+    </script>`,
   });
 });
 await page.addInitScript(() => {
@@ -74,21 +83,29 @@ const save = async (name, expr = 'window.bm.compositor.canvas') => {
 
 try {
   await page.goto(url);
-  const player = page.locator('.tiktok-player');
+  const activeSlide = page.locator('.tiktok-slide[data-active="true"]');
+  const player = activeSlide.locator('.tiktok-player');
   const playerUrl = await player.getAttribute('src');
-  const playerButton = page.frameLocator('.tiktok-player').getByRole('button', { name: '播放' });
+  const firstFrame = page.frameLocator('.tiktok-player[title*="1 / 15"]');
+  const secondFrame = page.frameLocator('.tiktok-player[title*="2 / 15"]');
+  const playerButton = firstFrame.getByRole('button', { name: '播放' });
   const playerClickable = await playerButton.click({ trial: true, timeout: 5000 }).then(() => true, () => false);
   check('条件 A：TikTok 播放器嵌入且可点击', /^https:\/\/www\.tiktok\.com\/player\/v1\/\d+\?/.test(playerUrl ?? '') && playerClickable);
+  await secondFrame.locator('body').evaluate((body) => { body.dataset.preloaded = 'true'; });
+  const preloadPaused = await secondFrame.locator('body[data-commands~="pause"]').waitFor({ state: 'attached', timeout: 5000 }).then(() => true, () => false);
+  check('条件 A：预载视频缓冲后暂停', preloadPaused);
   const feed = page.locator('.tiktok-feed');
   const feedHeight = await feed.evaluate((element) => element.clientHeight);
-  await page.locator('.tiktok-scroll-surface').hover();
+  await activeSlide.locator('.tiktok-scroll-surface').hover();
   await page.mouse.wheel(0, feedHeight);
-  const secondVideo = await page.locator('.tiktok-player[title*="2 / 15"]').waitFor({ timeout: 5000 }).then(() => true, () => false);
-  check('条件 A：滚轮按顺序切换视频，只加载当前播放器', secondVideo && await player.count() === 1 && await player.getAttribute('src') !== playerUrl);
+  const preloadedVideoPlaying = await secondFrame.locator('body[data-preloaded="true"][data-commands~="play"]').waitFor({ state: 'attached', timeout: 5000 }).then(() => true, () => false);
+  const previousVideoPaused = await firstFrame.locator('body[data-commands~="pause"]').waitFor({ state: 'attached', timeout: 5000 }).then(() => true, () => false);
+  check('条件 A：切换时复用预载播放器，上一条暂停', preloadedVideoPlaying && previousVideoPaused && (await player.getAttribute('title'))?.includes('2 / 15') && await page.locator('.tiktok-player').count() === 3);
+  await feed.evaluate((element) => element.scrollTo(0, 2 * element.clientHeight));
   const fallbackLink = await page.getByRole('link', { name: '打开原帖' }).getAttribute('href', { timeout: 5000 }).catch(() => null);
-  check('条件 A：播放失败时可打开当前视频的原帖', fallbackLink === 'https://www.tiktok.com/@lily_tomkinson/video/7706999381882785025');
+  check('条件 A：播放失败时可打开当前视频的原帖', fallbackLink === 'https://www.tiktok.com/@a314152/video/7706917622683585844');
   await feed.evaluate((element) => element.scrollTo(0, 0));
-  await page.locator('.tiktok-player[title*="1 / 15"]').waitFor({ timeout: 5000 });
+  await activeSlide.locator('.tiktok-player[title*="1 / 15"]').waitFor({ timeout: 5000 });
 
   // 1. 模型
   await page.waitForFunction(() => window.bm && ['ready', 'error'].includes(window.bm.store.get().avatar.status), null, { timeout: 90000 });

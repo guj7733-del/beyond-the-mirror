@@ -91,6 +91,10 @@ body,
   border: 0;
 }
 
+.tiktok-slide[data-active="false"] .tiktok-player {
+  pointer-events: none;
+}
+
 /* iframe 上方接收滑动，底部保留 TikTok 的播放控件。 */
 .tiktok-scroll-surface {
   position: absolute;

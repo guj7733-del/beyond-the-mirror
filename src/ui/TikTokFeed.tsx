@@ -16,38 +16,55 @@ export function TikTokFeed() {
   return (
     <div className="tiktok-feed" role="region" aria-label="TikTok 动物短视频，上下滑动切换" tabIndex={0} onScroll={updateActiveVideo}>
       {ANIMAL_VIDEOS.map((video, index) => (
-        <div className="tiktok-slide" key={video.id}>
-          {index === activeIndex && <TikTokPlayer video={video} index={index} />}
+        <div className="tiktok-slide" key={video.id} data-active={index === activeIndex}>
+          {Math.abs(index - activeIndex) <= 1 && <TikTokPlayer video={video} index={index} active={index === activeIndex} />}
         </div>
       ))}
     </div>
   );
 }
 
-function TikTokPlayer({ video, index }: { video: (typeof ANIMAL_VIDEOS)[number]; index: number }) {
+function sendPlayerCommand(frame: HTMLIFrameElement | null, type: 'play' | 'pause' | 'mute') {
+  frame?.contentWindow?.postMessage({ 'x-tiktok-player': true, type }, TIKTOK_ORIGIN);
+}
+
+function TikTokPlayer({ video, index, active }: { video: (typeof ANIMAL_VIDEOS)[number]; index: number; active: boolean }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [attempt, setAttempt] = useState(0);
-  const [unavailable, setUnavailable] = useState(false);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable'>('loading');
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => setUnavailable(true), 15000);
     function onPlayerMessage(event: MessageEvent) {
       if (event.origin !== TIKTOK_ORIGIN || event.source !== frameRef.current?.contentWindow || event.data?.['x-tiktok-player'] !== true) return;
       const { type, value } = event.data;
-      if (type === 'onPlayerReady' || (type === 'onStateChange' && value === 1)) {
-        clearTimeout(timeout);
-        setUnavailable(false);
+      const playing = type === 'onStateChange' && value === 1;
+      if (type === 'onPlayerReady' || playing) {
+        setStatus('ready');
+        // 等官方播放器实际开始解码后再暂停，保留下一条已经缓冲的画面。
+        if (playing && !active) sendPlayerCommand(frameRef.current, 'pause');
       } else if (type === 'onPlayerError' && value?.errorCode !== 3002) {
-        clearTimeout(timeout);
-        setUnavailable(true);
+        setStatus('unavailable');
       }
     }
     window.addEventListener('message', onPlayerMessage);
+    return () => window.removeEventListener('message', onPlayerMessage);
+  }, [active]);
+
+  useEffect(() => {
+    if (!active || status !== 'loading') return;
+    const timeout = window.setTimeout(() => setStatus('unavailable'), 15000);
+    return () => clearTimeout(timeout);
+  }, [active, status, attempt]);
+
+  useEffect(() => {
+    if (!active || status !== 'ready') return;
+    const frame = frameRef.current;
+    sendPlayerCommand(frame, 'play');
     return () => {
-      clearTimeout(timeout);
-      window.removeEventListener('message', onPlayerMessage);
+      sendPlayerCommand(frame, 'pause');
+      sendPlayerCommand(frame, 'mute');
     };
-  }, [attempt]);
+  }, [active, status]);
 
   return (
     <>
@@ -58,13 +75,15 @@ function TikTokPlayer({ video, index }: { video: (typeof ANIMAL_VIDEOS)[number];
         title={`TikTok 视频 ${index + 1} / ${ANIMAL_VIDEOS.length} · @${video.author}`}
         src={`${TIKTOK_ORIGIN}/player/v1/${video.id}?autoplay=1&muted=1&loop=1&fullscreen_button=0`}
         allow="autoplay"
+        aria-hidden={!active}
+        tabIndex={active ? 0 : -1}
       />
       <div className="tiktok-scroll-surface" aria-hidden="true" />
-      {unavailable && (
+      {active && status === 'unavailable' && (
         <div className="tiktok-playback-error">
           <p role="status">此视频暂时无法加载</p>
           <div className="row wrap">
-            <button className="btn" onClick={() => { setUnavailable(false); setAttempt((current) => current + 1); }}>
+            <button className="btn" onClick={() => { setStatus('loading'); setAttempt((current) => current + 1); }}>
               重试
             </button>
             <a className="btn" href={`${TIKTOK_ORIGIN}/@${video.author}/video/${video.id}`} target="_blank" rel="noopener noreferrer">

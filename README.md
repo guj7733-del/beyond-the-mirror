@@ -48,7 +48,7 @@ MediaPipe 文件（`public/mediapipe/`）和测试模型（`public/models/`）�
 
 ## 画面
 
-条件 A 按采集时的顺序播放 TikTok Explore 的前 15 条 Animals 视频。手机在主画面中部上下滑动，电脑用滚轮切换。当前视频默认静音循环，半身 Avatar 叠在右下角。点击左上方的“开启摄像头”即可驱动角色面捕。播放失败时可重试、打开原帖，或继续滑动。视频顺序可在 `src/config/tiktokVideos.ts` 里调整。
+条件 A 按采集时的顺序播放 TikTok Explore 的前 15 条 Animals 视频。手机在主画面中部上下滑动，电脑用滚轮切换。网页会提前缓冲下一条，并保留暂停的上一条。当前视频默认静音循环，半身 Avatar 叠在右下角。点击左上方的“开启摄像头”即可驱动角色面捕。播放失败时可重试、打开原帖，或继续滑动。视频顺序可在 `src/config/tiktokVideos.ts` 里调整。
 
 条件 B 对摄像头画面做镜像和自动构图，并把 Avatar 头部叠到用户脸上。条件 C 隐藏摄像头画面，只显示面捕驱动的 Avatar 头部。
 
