@@ -333,7 +333,7 @@ export class Engine {
   /** 选择实验条件。C 复用头部 Avatar 构图，但隐藏真人摄像头画面。 */
   setCondition(condition: Condition): void {
     this.updateSettings({ condition, version: condition === 'A' ? 'A' : 'B' });
-    const labels = { A: 'TikTok + Avatar：视频 + 右下角角色', B: 'Self + Avatar：真人 + Avatar', C: 'Avatar Only：仅 Avatar' };
+    const labels = { A: '短视频 + Avatar：视频 + 右下角角色', B: 'Self + Avatar：真人 + Avatar', C: 'Avatar Only：仅 Avatar' };
     this.toast(`条件 ${condition}：${labels[condition]}`);
   }
 

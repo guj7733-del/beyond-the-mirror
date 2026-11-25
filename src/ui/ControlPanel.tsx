@@ -67,8 +67,8 @@ export function ControlPanel({ ui }: { ui: UiState }) {
       </header>
 
       <div className="version-switch" role="group" aria-label="实验条件">
-        <button className={`btn ${s.condition === 'A' ? 'active' : ''}`} onClick={() => engine.setCondition('A')} title="播放 TikTok，右下角显示 Avatar">
-          <b>A · TikTok + Avatar</b><span>视频 + 角色</span>
+        <button className={`btn ${s.condition === 'A' ? 'active' : ''}`} onClick={() => engine.setCondition('A')} title="播放短视频，右下角显示 Avatar">
+          <b>A · 短视频 + Avatar</b><span>视频 + 角色</span>
         </button>
         <button className={`btn ${s.condition === 'B' ? 'active' : ''}`} onClick={() => engine.setCondition('B')} title="Self + Avatar：真人与 Avatar 同时显示">
           <b>B · Self + Avatar</b><span>真人 + Avatar</span>
@@ -301,7 +301,7 @@ export function ControlPanel({ ui }: { ui: UiState }) {
           </button>
         </div>
         <p className="hint">
-          {isB ? '录制左侧 9:16 画面（1080×1920，30fps），浏览器支持时为 MP4，否则为 WebM。' : '截图和录制仅采集角色画布。需要同时录下 TikTok 和角色时，请使用系统录屏。'}
+          {isB ? '录制左侧 9:16 画面（1080×1920，30fps），浏览器支持时为 MP4，否则为 WebM。' : '截图和录制仅采集角色画布。需要同时录下短视频和角色时，请使用系统录屏。'}
         </p>
         {isB && (
           <>

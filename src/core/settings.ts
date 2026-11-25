@@ -5,7 +5,7 @@ import type { BackgroundMode } from '../render/Compositor';
 
 /** A：Avatar 在右下角，半身（第一版）；B：只有头部叠在用户脸上。 */
 export type Version = 'A' | 'B';
-/** 实验条件：A TikTok + Avatar，B 真人 + Avatar，C 仅 Avatar。 */
+/** 实验条件：A 短视频 + Avatar，B 真人 + Avatar，C 仅 Avatar。 */
 export type Condition = 'A' | 'B' | 'C';
 
 /** 版本 B 的头部大小与位置微调。偏移以用户“双眼 → 下巴”的距离为单位。 */

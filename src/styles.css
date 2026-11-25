@@ -63,8 +63,9 @@ body,
   height: calc(100vh - 56px);
 }
 
-.tiktok-feed,
-.tiktok-player,
+.video-feed,
+.video-player,
+.video-cache-screen,
 .composite {
   position: absolute;
   inset: 0;
@@ -73,58 +74,68 @@ body,
   height: 100%;
 }
 
-.tiktok-feed {
+.video-feed {
   overflow: hidden auto;
   overscroll-behavior-y: contain;
   scroll-snap-type: y mandatory;
   scrollbar-width: none;
 }
 
-.tiktok-slide {
+.video-slide {
   position: relative;
   height: 100%;
   scroll-snap-align: start;
   scroll-snap-stop: always;
 }
 
-.tiktok-player {
-  border: 0;
-}
-
-.tiktok-slide[data-active="false"] .tiktok-player {
+.video-player {
+  object-fit: contain;
   pointer-events: none;
 }
 
-/* iframe 上方接收滑动，底部保留 TikTok 的播放控件。 */
-.tiktok-scroll-surface {
-  position: absolute;
-  inset: 0 0 64px;
-  touch-action: pan-y;
+.video-cache-screen {
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.72);
+  touch-action: none;
 }
 
-.tiktok-playback-error {
-  position: absolute;
-  top: 38%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  max-width: calc(100% - 24px);
-  padding: 12px;
+.video-notice {
+  padding: 16px;
   border-radius: var(--radius);
   background: var(--panel);
   text-align: center;
 }
 
-.tiktok-playback-error p {
-  margin: 0 0 8px;
-  white-space: nowrap;
+.video-cache-screen .video-notice {
+  display: grid;
+  gap: 10px;
 }
 
-.tiktok-playback-error .row {
-  justify-content: center;
+.video-cache-screen p {
+  margin: 0;
 }
 
-.tiktok-playback-error a {
-  text-decoration: none;
+.video-cache-screen progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.video-cache-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.video-playback-notice {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: calc(100% - 24px);
+  margin: 0;
 }
 
 .composite {

@@ -57,7 +57,7 @@ export interface CompositeInput {
 
 /**
  * 9:16 合成器：摄像头画面 → Avatar（透明背景）→ 短视频界面。
- * TikTok 模式下只绘制透明背景的 Avatar，播放器单独显示在画布下面。
+ * 条件 A 只绘制透明背景的 Avatar，播放器单独显示在画布下面。
  */
 export class Compositor {
   readonly canvas: HTMLCanvasElement;

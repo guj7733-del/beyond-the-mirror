@@ -52,25 +52,19 @@ const ctx = await browser.newContext({ viewport: { width: 1500, height: 940 }, a
 const page = await ctx.newPage();
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(e.message));
-// 用可点击的测试页面替代第三方播放器，避免网络和播放器脚本影响本地自检。
-await page.route('https://www.tiktok.com/player/v1/**', (route) => {
-  const blocked = new URL(route.request().url()).pathname.endsWith('/7706917622683585844');
-  const message = blocked
-    ? { 'x-tiktok-player': true, type: 'onPlayerError', value: { errorCode: 3001 } }
-    : { 'x-tiktok-player': true, type: 'onPlayerReady' };
-  const host = JSON.stringify(new URL(url).origin);
-  return route.fulfill({
-    contentType: 'text/html; charset=utf-8',
-    body: `<!doctype html><button style="position:absolute;bottom:12px;left:50%">播放</button><script>
-      window.addEventListener('message', event => {
-        if (event.origin === ${host} && event.data?.['x-tiktok-player']) {
-          document.body.dataset.commands = (document.body.dataset.commands || '') + ' ' + event.data.type;
-        }
-      });
-      parent.postMessage(${JSON.stringify(message)}, ${host});
-      if (${!blocked}) parent.postMessage({ 'x-tiktok-player': true, type: 'onStateChange', value: 1 }, ${host});
-    </script>`,
-  });
+const videoRoute = '**/Videos/*.mp4';
+const videoRequests = [];
+let failLastVideo;
+const lastVideo = new Promise((resolve) => { failLastVideo = resolve; });
+await page.route(videoRoute, async (route) => {
+  const file = new URL(route.request().url()).pathname.split('/').at(-1);
+  videoRequests.push(file);
+  if (file === '8.mp4' && videoRequests.filter((name) => name === file).length === 1) {
+    await lastVideo;
+    await route.abort();
+    return;
+  }
+  await route.continue();
 });
 await page.addInitScript(() => {
   try { localStorage.clear(); } catch { /* ignore */ }
@@ -83,29 +77,49 @@ const save = async (name, expr = 'window.bm.compositor.canvas') => {
 
 try {
   await page.goto(url);
-  const activeSlide = page.locator('.tiktok-slide[data-active="true"]');
-  const player = activeSlide.locator('.tiktok-player');
-  const playerUrl = await player.getAttribute('src');
-  const firstFrame = page.frameLocator('.tiktok-player[title*="1 / 15"]');
-  const secondFrame = page.frameLocator('.tiktok-player[title*="2 / 15"]');
-  const playerButton = firstFrame.getByRole('button', { name: '播放' });
-  const playerClickable = await playerButton.click({ trial: true, timeout: 5000 }).then(() => true, () => false);
-  check('条件 A：TikTok 播放器嵌入且可点击', /^https:\/\/www\.tiktok\.com\/player\/v1\/\d+\?/.test(playerUrl ?? '') && playerClickable);
-  await secondFrame.locator('body').evaluate((body) => { body.dataset.preloaded = 'true'; });
-  const preloadPaused = await secondFrame.locator('body[data-commands~="pause"]').waitFor({ state: 'attached', timeout: 5000 }).then(() => true, () => false);
-  check('条件 A：预载视频缓冲后暂停', preloadPaused);
-  const feed = page.locator('.tiktok-feed');
-  const feedHeight = await feed.evaluate((element) => element.clientHeight);
-  await activeSlide.locator('.tiktok-scroll-surface').hover();
-  await page.mouse.wheel(0, feedHeight);
-  const preloadedVideoPlaying = await secondFrame.locator('body[data-preloaded="true"][data-commands~="play"]').waitFor({ state: 'attached', timeout: 5000 }).then(() => true, () => false);
-  const previousVideoPaused = await firstFrame.locator('body[data-commands~="pause"]').waitFor({ state: 'attached', timeout: 5000 }).then(() => true, () => false);
-  check('条件 A：切换时复用预载播放器，上一条暂停', preloadedVideoPlaying && previousVideoPaused && (await player.getAttribute('title'))?.includes('2 / 15') && await page.locator('.tiktok-player').count() === 3);
-  await feed.evaluate((element) => element.scrollTo(0, 2 * element.clientHeight));
-  const fallbackLink = await page.getByRole('link', { name: '打开原帖' }).getAttribute('href', { timeout: 5000 }).catch(() => null);
-  check('条件 A：播放失败时可打开当前视频的原帖', fallbackLink === 'https://www.tiktok.com/@a314152/video/7706917622683585844');
-  await feed.evaluate((element) => element.scrollTo(0, 0));
-  await activeSlide.locator('.tiktok-player[title*="1 / 15"]').waitFor({ timeout: 5000 });
+  const feed = page.locator('.video-feed');
+  const activePlayer = page.locator('.video-slide[data-active="true"] video');
+  const firstPlayer = page.locator('video[aria-label="视频 1 / 8"]');
+  const nextPlayer = page.locator('video[aria-label="视频 2 / 8"]');
+
+  await page.getByText('正在缓存短视频（7 / 8）', { exact: true }).waitFor();
+  await page.locator('.video-cache-screen').hover();
+  await page.mouse.wheel(0, 600);
+  check('条件 A：缓存未完成时显示进度且禁止滑动播放', await feed.count() === 0 && await activePlayer.count() === 0);
+  failLastVideo();
+  await page.getByText('部分视频缓存失败（7 / 8）', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '重试缓存' }).click();
+
+  const videoPlaying = (index) => page.waitForFunction((number) => {
+    const player = document.querySelector('.video-slide[data-active="true"] video');
+    return player?.getAttribute('aria-label') === `视频 ${number} / 8`
+      && !player.paused && player.currentTime > 0 && player.currentSrc.startsWith('blob:');
+  }, index, { timeout: 10000 });
+  await videoPlaying(1);
+  check('条件 A：重试只下载缺失视频，缓存齐全后原生播放', videoRequests.length === 9 && videoRequests.at(-1) === '8.mp4');
+
+  await page.waitForFunction(() => document.querySelector('video[aria-label="视频 2 / 8"]')?.readyState >= 2);
+  await nextPlayer.evaluate((player) => { player.dataset.preloaded = 'true'; });
+  const preloadPaused = await nextPlayer.evaluate((player) => player.paused);
+  await feed.hover();
+  await page.mouse.wheel(0, await feed.evaluate((element) => element.clientHeight));
+  await videoPlaying(2);
+  check('条件 A：滑动复用预载视频，上一条暂停', preloadPaused && await activePlayer.getAttribute('data-preloaded') === 'true' && await firstPlayer.evaluate((player) => player.paused));
+
+  await page.unroute(videoRoute);
+  await page.route(videoRoute, (route) => {
+    videoRequests.push(new URL(route.request().url()).pathname);
+    return route.abort();
+  });
+  await page.reload();
+  await videoPlaying(1);
+  for (let index = 2; index <= 8; index++) {
+    await feed.evaluate((element, number) => { element.scrollTop = (number - 1) * element.clientHeight; }, index);
+    await videoPlaying(index);
+  }
+  check('条件 A：刷新后八条视频都从缓存播放，无视频网络请求', videoRequests.length === 9);
+  await feed.evaluate((element) => { element.scrollTop = 0; });
+  await videoPlaying(1);
 
   // 1. 模型
   await page.waitForFunction(() => window.bm && ['ready', 'error'].includes(window.bm.store.get().avatar.status), null, { timeout: 90000 });
