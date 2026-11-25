@@ -1,14 +1,21 @@
+export type ExperimentStatus = 'idle' | 'running' | 'paused' | 'ended';
+
 /**
  * 实验计时器。以真实时间（performance.now）为准，切换标签页或掉帧都不会让计时变慢。
  */
 export class ExperimentClock {
   private accumulated = 0;
   private startedAt: number | null = null;
+  private stoppedStatus: Exclude<ExperimentStatus, 'running'> = 'idle';
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
   get running(): boolean {
     return this.startedAt !== null;
+  }
+
+  get status(): ExperimentStatus {
+    return this.running ? 'running' : this.stoppedStatus;
   }
 
   get timeSec(): number {
@@ -17,14 +24,22 @@ export class ExperimentClock {
   }
 
   start(): void {
-    if (this.startedAt === null) this.startedAt = this.now();
+    if (this.running) return;
+    if (this.stoppedStatus === 'ended') this.reset();
+    this.startedAt = this.now();
   }
 
   pause(): void {
     if (this.startedAt !== null) {
       this.accumulated += (this.now() - this.startedAt) / 1000;
       this.startedAt = null;
+      this.stoppedStatus = 'paused';
     }
+  }
+
+  end(): void {
+    this.pause();
+    this.stoppedStatus = 'ended';
   }
 
   toggle(): void {
@@ -36,6 +51,7 @@ export class ExperimentClock {
   reset(): void {
     this.accumulated = 0;
     this.startedAt = null;
+    this.stoppedStatus = 'idle';
   }
 
   /** 跳到指定时间，保持当前的运行 / 暂停状态。 */

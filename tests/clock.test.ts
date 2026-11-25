@@ -24,6 +24,23 @@ describe('ExperimentClock', () => {
     expect(c.timeSec).toBe(0);
     expect(c.running).toBe(false);
   });
+
+  it('结束保留本轮用时，再次开始时从零计时', () => {
+    let now = 0;
+    const clock = new ExperimentClock(() => now);
+    expect(clock.status).toBe('idle');
+    clock.start();
+    now = 2500;
+    clock.pause();
+    expect(clock.status).toBe('paused');
+    clock.end();
+    now = 9000;
+    expect(clock.status).toBe('ended');
+    expect(clock.timeSec).toBe(2.5);
+    clock.start();
+    expect(clock.status).toBe('running');
+    expect(clock.timeSec).toBe(0);
+  });
 });
 
 describe('stageForTime', () => {

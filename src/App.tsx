@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { engine, useUi } from './ui/engine';
 import { ControlPanel } from './ui/ControlPanel';
 import { LocalVideos } from './ui/LocalVideos';
+import { MobileExperiment } from './ui/MobileExperiment';
 import { STAGES } from './fatigue/stages';
 
 export function App() {
@@ -22,6 +23,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
+      if (t instanceof Element && t.closest('.experiment-sheet[open]')) return;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
@@ -64,6 +66,7 @@ export function App() {
           )}
           {ui.avatar.status === 'loading' && <div className="chip info">模型加载中 {Math.round(ui.avatar.progress * 100)}%</div>}
           {ui.recording.active && <div className="chip rec">● REC {ui.recording.seconds.toFixed(0)}s</div>}
+          <MobileExperiment stageRef={stageRef} ui={ui} />
         </div>
         {!ui.panelVisible && (
           <div className="present-hint">

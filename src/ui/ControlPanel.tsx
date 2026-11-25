@@ -78,7 +78,7 @@ export function ControlPanel({ ui }: { ui: UiState }) {
         </button>
       </div>
 
-      <Section title="实验 Experiment" sub={ex.running ? '计时中' : '已暂停'}>
+      <Section title="实验 Experiment" sub={ex.status === 'ended' ? '已结束' : ex.running ? '计时中' : '已暂停'}>
         <div className="readout">
           <div>
             <small>Current Time</small>

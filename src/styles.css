@@ -217,6 +217,136 @@ body,
   font-size: 12px;
 }
 
+.experiment-hotspot {
+  display: none;
+}
+
+@media (any-pointer: coarse) {
+  .phone {
+    -webkit-touch-callout: none;
+    user-select: none;
+  }
+
+  .experiment-hotspot {
+    display: block;
+    position: absolute;
+    top: env(safe-area-inset-top, 0px);
+    left: env(safe-area-inset-left, 0px);
+    width: 64px;
+    height: 64px;
+    pointer-events: none;
+  }
+}
+
+.experiment-sheet {
+  position: fixed;
+  inset: auto 0 0;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 0;
+  width: min(100%, 480px);
+  max-width: none;
+  max-height: calc(100dvh - max(12px, env(safe-area-inset-top, 0px)));
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 20px 20px 0 0;
+  overflow: hidden;
+  -webkit-touch-callout: default;
+  user-select: auto;
+}
+
+.experiment-sheet::backdrop {
+  background: rgb(0 0 0 / 60%);
+}
+
+.experiment-sheet-layout {
+  display: flex;
+  flex-direction: column;
+  max-height: inherit;
+  padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px));
+}
+
+.experiment-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 14px;
+}
+
+.experiment-sheet-header h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.experiment-sheet-body {
+  display: grid;
+  gap: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.experiment-sheet-body p {
+  margin: 0;
+}
+
+.experiment-sheet-body fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.experiment-sheet-body legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.experiment-stage-times {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.experiment-stage-times span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.experiment-field {
+  display: grid;
+  gap: 4px;
+}
+
+.experiment-field input,
+.experiment-field select {
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #262832;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+}
+
+.experiment-field input:read-only {
+  color: var(--muted);
+}
+
+.experiment-sheet-actions {
+  display: grid;
+  gap: 8px;
+  padding-block: 14px max(16px, env(safe-area-inset-bottom, 0px));
+}
+
+.experiment-sheet .btn {
+  min-height: 44px;
+}
+
 /* ———— 右侧控制面板 ———— */
 .panel {
   width: 400px;

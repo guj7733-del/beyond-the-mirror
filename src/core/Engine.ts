@@ -3,7 +3,7 @@ import { DEFAULT_SETTINGS, clearSettings, loadSettings, saveSettings, versionFro
 import { CameraController, CameraError } from '../tracking/CameraController';
 import { FaceTracker } from '../tracking/FaceTracker';
 import { FaceProcessor } from '../tracking/FaceProcessor';
-import { ExperimentClock, sanitizeStageTimes, stageForTime } from '../fatigue/ExperimentClock';
+import { ExperimentClock, sanitizeStageTimes, stageForTime, type ExperimentStatus } from '../fatigue/ExperimentClock';
 import { FatigueController } from '../fatigue/FatigueController';
 import { STAGES, type FatigueParams } from '../fatigue/stages';
 import { AvatarLoadError, loadAvatarSource } from '../avatar/AvatarLoader';
@@ -40,7 +40,7 @@ export interface UiState {
   };
   tracker: { status: 'idle' | 'loading' | 'ready' | 'error'; delegate: string; error: string | null; fps: number; ms: number; face: boolean; presence: number };
   avatar: { status: 'idle' | 'loading' | 'ready' | 'error'; progress: number; error: string | null; report: CapabilityReport | null; name: string; placeholder: boolean; tuning: OverlayTuning | null };
-  experiment: { running: boolean; time: number; autoStage: number; stage: number; manual: number | null; blend: number };
+  experiment: { status: ExperimentStatus; running: boolean; time: number; autoStage: number; stage: number; manual: number | null; blend: number };
   renderFps: number;
   recording: { active: boolean; seconds: number; mime: string };
   live: { values: LiveValue[]; head: { yaw: number; pitch: number; roll: number } };
@@ -109,7 +109,7 @@ export class Engine {
       camera: { status: 'off', error: null, label: '', size: '', devices: [], deviceId: '' },
       tracker: { status: 'idle', delegate: '', error: null, fps: 0, ms: 0, face: false, presence: 0 },
       avatar: { status: 'idle', progress: 0, error: null, report: null, name: '', placeholder: false, tuning: null },
-      experiment: { running: false, time: 0, autoStage: 0, stage: 0, manual: null, blend: 1 },
+      experiment: { status: 'idle', running: false, time: 0, autoStage: 0, stage: 0, manual: null, blend: 1 },
       renderFps: 0,
       recording: { active: false, seconds: 0, mime: '' },
       live: { values: [], head: { yaw: 0, pitch: 0, roll: 0 } },
@@ -237,6 +237,7 @@ export class Engine {
   // ————————————————— 实验控制 —————————————————
 
   startExperiment(): void {
+    if (this.clock.status === 'ended') this.resetExperiment();
     this.clock.start();
     this.pushExperiment();
   }
@@ -247,7 +248,12 @@ export class Engine {
   }
 
   toggleExperiment(): void {
-    this.clock.toggle();
+    if (this.clock.running) this.pauseExperiment();
+    else this.startExperiment();
+  }
+
+  endExperiment(): void {
+    this.clock.end();
     this.pushExperiment();
   }
 
@@ -255,6 +261,7 @@ export class Engine {
   resetExperiment(): void {
     this.clock.reset();
     this.manual = null;
+    this.fastUntil = 0;
     this.fatigue.setStage(0, true);
     this.pushExperiment();
   }
@@ -279,6 +286,7 @@ export class Engine {
     const auto = stageForTime(t, this.settings.stageTimes);
     this.store.set({
       experiment: {
+        status: this.clock.status,
         running: this.clock.running,
         time: t,
         autoStage: auto,
