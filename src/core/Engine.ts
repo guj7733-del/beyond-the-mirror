@@ -39,7 +39,16 @@ export interface UiState {
     deviceId: string;
   };
   tracker: { status: 'idle' | 'loading' | 'ready' | 'error'; delegate: string; error: string | null; fps: number; ms: number; face: boolean; presence: number };
-  avatar: { status: 'idle' | 'loading' | 'ready' | 'error'; progress: number; error: string | null; report: CapabilityReport | null; name: string; placeholder: boolean; tuning: OverlayTuning | null };
+  avatar: {
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    progress: number;
+    error: string | null;
+    report: CapabilityReport | null;
+    name: string;
+    localFileName: string | null;
+    placeholder: boolean;
+    tuning: OverlayTuning | null;
+  };
   experiment: { status: ExperimentStatus; running: boolean; time: number; autoStage: number; stage: number; manual: number | null; blend: number };
   renderFps: number;
   recording: { active: boolean; seconds: number; mime: string };
@@ -108,7 +117,7 @@ export class Engine {
       settings: this.settings,
       camera: { status: 'off', error: null, label: '', size: '', devices: [], deviceId: '' },
       tracker: { status: 'idle', delegate: '', error: null, fps: 0, ms: 0, face: false, presence: 0 },
-      avatar: { status: 'idle', progress: 0, error: null, report: null, name: '', placeholder: false, tuning: null },
+      avatar: { status: 'idle', progress: 0, error: null, report: null, name: '', localFileName: null, placeholder: false, tuning: null },
       experiment: { status: 'idle', running: false, time: 0, autoStage: 0, stage: 0, manual: null, blend: 1 },
       renderFps: 0,
       recording: { active: false, seconds: 0, mime: '' },
@@ -380,7 +389,7 @@ export class Engine {
     }
   }
 
-  async loadModel(src: string | File): Promise<void> {
+  async loadModel(src: string | File): Promise<boolean> {
     const token = ++this.loadToken;
     const name = typeof src === 'string' ? src.split('/').pop() ?? src : src.name;
     this.store.set((s) => ({ avatar: { ...s.avatar, status: 'loading', progress: 0, error: null, name } }));
@@ -394,28 +403,42 @@ export class Engine {
       });
       if (token !== this.loadToken) {
         source.dispose();
-        return;
+        return false;
       }
       const saved = typeof src === 'string' ? loadTuning(src) : null;
       const avatar = new Avatar(source, textures, { ...options, overlayTuning: { ...(options.overlayTuning ?? {}), ...(saved ?? {}) } });
       this.swapAvatar(avatar);
       this.currentModelKey = typeof src === 'string' ? src : `file:${src.name}`;
-      this.store.set({ avatar: { status: 'ready', progress: 1, error: null, report: avatar.report, name: source.meta.fileName, placeholder: false, tuning: avatar.overlayTuning } });
+      this.store.set({
+        avatar: {
+          status: 'ready',
+          progress: 1,
+          error: null,
+          report: avatar.report,
+          name: source.meta.fileName,
+          localFileName: typeof src === 'string' ? null : src.name,
+          placeholder: false,
+          tuning: avatar.overlayTuning,
+        },
+      });
       if (typeof src === 'string') this.updateSettings({ modelUrl: src });
       console.info('[Avatar] 模型能力检查：', avatar.report);
       for (const w of avatar.report.warnings) console.warn('[Avatar] ', w);
+      return true;
     } catch (err) {
-      if (token !== this.loadToken) return;
+      if (token !== this.loadToken) return false;
       const msg = err instanceof AvatarLoadError ? err.message : `模型加载失败：${(err as Error)?.message ?? err}`;
       console.error('[Avatar]', err);
       this.store.set((s) => ({ avatar: { ...s.avatar, status: 'error', error: msg } }));
       this.toast(msg, 'error');
-      if (!this.avatar) await this.loadPlaceholder();
+      if (!this.avatar) await this.loadPlaceholder(token);
+      return false;
     }
   }
 
-  private async loadPlaceholder(): Promise<void> {
+  private async loadPlaceholder(token: number): Promise<void> {
     const textures = await this.textures;
+    if (token !== this.loadToken) return;
     const avatar = new Avatar(createPlaceholderSource(), textures);
     this.swapAvatar(avatar);
     this.currentModelKey = 'placeholder';

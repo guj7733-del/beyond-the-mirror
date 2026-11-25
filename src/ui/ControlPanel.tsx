@@ -1,53 +1,20 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { engine } from './engine';
 import type { UiState } from '../core/Engine';
 import { STAGES } from '../fatigue/stages';
-import { DEFAULT_LAYOUT, type AvatarLayout } from '../render/AvatarRenderer';
-import { DEFAULT_HEAD_LAYOUT, type HeadLayout } from '../core/settings';
 import { DEFAULT_TRACKING, type TrackingSettings } from '../tracking/FaceProcessor';
 import { DEFAULT_STAGE_TIMES } from '../fatigue/stages';
 import { formatTime } from '../utils/math';
 import { DebugPanel } from './DebugPanel';
+import { AvatarSettings } from './AvatarSettings';
+import { Section, Slider, Toggle } from './SettingFields';
 import type { BackgroundMode } from '../render/Compositor';
-
-function Section({ title, sub, children, open = true }: { title: string; sub?: string; children: ReactNode; open?: boolean }) {
-  return (
-    <details className="section" open={open}>
-      <summary>
-        <span>{title}</span>
-        {sub && <em>{sub}</em>}
-      </summary>
-      <div className="section-body">{children}</div>
-    </details>
-  );
-}
-
-function Slider(props: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; fmt?: (v: number) => string }) {
-  return (
-    <label className="slider">
-      <span className="slider-label">{props.label}</span>
-      <input type="range" min={props.min} max={props.max} step={props.step} value={props.value} onChange={(e) => props.onChange(Number(e.target.value))} />
-      <span className="slider-value">{props.fmt ? props.fmt(props.value) : props.value.toFixed(2)}</span>
-    </label>
-  );
-}
-
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <label className="toggle">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      <span>{label}</span>
-    </label>
-  );
-}
 
 export function ControlPanel({ ui }: { ui: UiState }) {
   const s = ui.settings;
   const ex = ui.experiment;
   const stage = STAGES[ex.stage];
   const maxT = Math.max(120, Math.ceil((s.stageTimes[s.stageTimes.length - 1] + 30) / 10) * 10);
-  const setLayout = (p: Partial<AvatarLayout>) => engine.updateSettings({ layout: { ...s.layout, ...p } });
-  const setHead = (p: Partial<HeadLayout>) => engine.updateSettings({ headLayout: { ...s.headLayout, ...p } });
   const isB = s.condition !== 'A';
   const setTracking = (p: Partial<TrackingSettings>) => engine.updateSettings({ tracking: { ...s.tracking, ...p } });
   const [timesDraft, setTimesDraft] = useState<string[] | null>(null);
@@ -191,64 +158,26 @@ export function ControlPanel({ ui }: { ui: UiState }) {
       </Section>
 
       <Section title="角色 Avatar" sub={ui.avatar.status === 'ready' ? ui.avatar.name : ui.avatar.status === 'loading' ? '加载中' : ''}>
-        <div className="row">
-          <select value={s.modelUrl} onChange={(e) => engine.loadModel(e.target.value)}>
-            {ui.models.map((m) => (
-              <option key={m.url} value={m.url}>
-                {m.name}
-              </option>
-            ))}
-            {!ui.models.some((m) => m.url === s.modelUrl) && <option value={s.modelUrl}>{s.modelUrl}</option>}
-          </select>
-          <label className="btn file">
-            本地文件…
-            <input
-              type="file"
-              accept=".vrm,.glb,.gltf"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) engine.loadModel(f);
-                e.target.value = '';
-              }}
-            />
-          </label>
-        </div>
-        {ui.avatar.status === 'loading' && <progress value={ui.avatar.progress} max={1} />}
-        {ui.avatar.error && <p className="err">{ui.avatar.error}</p>}
-        {ui.avatar.placeholder && <p className="warn-text">当前显示的是占位角色。</p>}
-        {ui.avatar.report && (
-          <p className={ui.avatar.report.warnings.length ? 'warn-text' : 'muted'}>
-            {ui.avatar.report.meta.specVersion} · ARKit 直连 {ui.avatar.report.counts.direct}/52
-            {ui.avatar.report.warnings.length ? ` · 模型检查有 ${ui.avatar.report.warnings.length} 条提示，详见“调试 → 模型检查”` : ' · 模型检查无异常'}
-          </p>
-        )}
-        <Toggle label={`角色戴眼镜（版本 ${s.version}）`} checked={!!s.glasses[s.version]} onChange={(v) => engine.updateSettings({ glasses: { ...s.glasses, [s.version]: v } })} />
-        {!isB && (
-          <>
-            <Slider label="宽度" value={s.layout.widthPct} min={0.25} max={1} step={0.01} onChange={(v) => setLayout({ widthPct: v })} />
-            <Slider label="高度" value={s.layout.heightPct} min={0.2} max={0.9} step={0.01} onChange={(v) => setLayout({ heightPct: v })} />
-            <Slider label="右边距" value={s.layout.rightPct} min={0} max={0.5} step={0.005} onChange={(v) => setLayout({ rightPct: v })} />
-            <Slider label="下边距" value={s.layout.bottomPct} min={0} max={0.5} step={0.005} onChange={(v) => setLayout({ bottomPct: v })} />
-            <Slider label="角色缩放" value={s.layout.zoom} min={0.5} max={2} step={0.01} onChange={(v) => setLayout({ zoom: v })} />
-            <Slider label="上下平移" value={s.layout.offsetY} min={-0.5} max={0.5} step={0.01} onChange={(v) => setLayout({ offsetY: v })} />
-            <Slider label="左右平移" value={s.layout.offsetX} min={-0.5} max={0.5} step={0.01} onChange={(v) => setLayout({ offsetX: v })} />
-            <Slider label="朝向" value={s.layout.yawDeg} min={-45} max={45} step={1} fmt={(v) => `${v.toFixed(0)}°`} onChange={(v) => setLayout({ yawDeg: v })} />
-            <button className="btn small" onClick={() => engine.updateSettings({ layout: { ...DEFAULT_LAYOUT } })}>
-              恢复默认布局
-            </button>
-          </>
-        )}
-        {isB && (
-          <>
-            <Slider label="头部大小" value={s.headLayout.scale} min={0.6} max={1.8} step={0.01} onChange={(v) => setHead({ scale: v })} />
-            <Slider label="上下偏移" value={s.headLayout.offsetY} min={-0.6} max={0.6} step={0.01} onChange={(v) => setHead({ offsetY: v })} />
-            <Slider label="左右偏移" value={s.headLayout.offsetX} min={-0.6} max={0.6} step={0.01} onChange={(v) => setHead({ offsetX: v })} />
-            <p className="hint">头部按用户脸宽缩放，角色下巴对齐用户闭嘴时的下巴。没开摄像头时放在画面中央，方便预览；摄像头开着但没检测到人脸时，头部会淡出。</p>
-            <button className="btn small" onClick={() => engine.updateSettings({ headLayout: { ...DEFAULT_HEAD_LAYOUT } })}>
-              恢复默认
-            </button>
-          </>
-        )}
+        <AvatarSettings
+          settings={s}
+          condition={s.condition}
+          version={s.version}
+          models={ui.models}
+          modelUrl={s.modelUrl}
+          localFileName={ui.avatar.localFileName}
+          onModelChange={(source) => { void engine.loadModel(source); }}
+          onChange={(patch) => engine.updateSettings(patch)}
+        >
+          {ui.avatar.status === 'loading' && <progress value={ui.avatar.progress} max={1} />}
+          {ui.avatar.error && <p className="err">{ui.avatar.error}</p>}
+          {ui.avatar.placeholder && <p className="warn-text">当前显示的是占位角色。</p>}
+          {ui.avatar.report && (
+            <p className={ui.avatar.report.warnings.length ? 'warn-text' : 'muted'}>
+              {ui.avatar.report.meta.specVersion} · ARKit 直连 {ui.avatar.report.counts.direct}/52
+              {ui.avatar.report.warnings.length ? ` · 模型检查有 ${ui.avatar.report.warnings.length} 条提示，详见“调试 → 模型检查”` : ' · 模型检查无异常'}
+            </p>
+          )}
+        </AvatarSettings>
       </Section>
 
       <Section title="贴片微调 Overlay" sub="替换模型后对齐眼部效果" open={false}>
