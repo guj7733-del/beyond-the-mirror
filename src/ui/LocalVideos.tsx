@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type UIEvent } from 'react';
+import { useEffect, useRef, useState, type RefObject, type UIEvent } from 'react';
 import { loadVideoLibrary, VIDEO_COUNT } from './videoCache';
 
-export function LocalVideos({ visible }: { visible: boolean }) {
+export function LocalVideos({ activeVideo }: { activeVideo: RefObject<HTMLVideoElement | null> }) {
   const downloaded = useRef(new Map<string, Blob>());
   const [files, setFiles] = useState<Blob[] | null>(null);
   const [completed, setCompleted] = useState(0);
@@ -17,8 +17,7 @@ export function LocalVideos({ visible }: { visible: boolean }) {
     return () => controller.abort();
   }, [attempt]);
 
-  if (!visible) return null;
-  if (files) return <VideoFeed files={files} />;
+  if (files) return <VideoFeed files={files} activeVideo={activeVideo} />;
 
   return (
     <div className="video-cache-screen">
@@ -35,7 +34,7 @@ export function LocalVideos({ visible }: { visible: boolean }) {
   );
 }
 
-function VideoFeed({ files }: { files: Blob[] }) {
+function VideoFeed({ files, activeVideo }: { files: Blob[]; activeVideo: RefObject<HTMLVideoElement | null> }) {
   const [activeIndex, setActiveIndex] = useState(0);
 
   function updateActiveVideo(event: UIEvent<HTMLDivElement>) {
@@ -50,7 +49,7 @@ function VideoFeed({ files }: { files: Blob[] }) {
       {files.map((file, index) => (
         <div className="video-slide" key={index} data-active={index === activeIndex}>
           {Math.abs(index - activeIndex) <= 1 && (
-            <VideoPlayer file={file} active={index === activeIndex} label={`视频 ${index + 1} / ${files.length}`} />
+            <VideoPlayer file={file} active={index === activeIndex} activeVideo={activeVideo} label={`视频 ${index + 1} / ${files.length}`} />
           )}
         </div>
       ))}
@@ -58,7 +57,7 @@ function VideoFeed({ files }: { files: Blob[] }) {
   );
 }
 
-function VideoPlayer({ file, active, label }: { file: Blob; active: boolean; label: string }) {
+function VideoPlayer({ file, active, activeVideo, label }: { file: Blob; active: boolean; activeVideo: RefObject<HTMLVideoElement | null>; label: string }) {
   const playerRef = useRef<HTMLVideoElement>(null);
   const [needsTap, setNeedsTap] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -77,6 +76,7 @@ function VideoPlayer({ file, active, label }: { file: Blob; active: boolean; lab
   useEffect(() => {
     if (!active) return;
     const player = playerRef.current!;
+    activeVideo.current = player;
     let current = true;
     void player.play().catch(() => {
       if (current && !player.error) setNeedsTap(true);
@@ -84,8 +84,9 @@ function VideoPlayer({ file, active, label }: { file: Blob; active: boolean; lab
     return () => {
       current = false;
       player.pause();
+      if (activeVideo.current === player) activeVideo.current = null;
     };
-  }, [active]);
+  }, [active, activeVideo]);
 
   return (
     <>

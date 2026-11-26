@@ -1,21 +1,20 @@
 import { DEFAULT_STAGE_TIMES } from '../fatigue/stages';
 import { DEFAULT_TRACKING, type TrackingSettings } from '../tracking/FaceProcessor';
 import { DEFAULT_LAYOUT, type AvatarLayout } from '../render/AvatarRenderer';
-import type { BackgroundMode } from '../render/Compositor';
 
 /** A：Avatar 在右下角，半身（第一版）；B：只有头部叠在用户脸上。 */
 export type Version = 'A' | 'B';
-/** 实验条件：A 短视频 + Avatar，B 真人 + Avatar，C 仅 Avatar。 */
+/** 三组共用短视频。右下角分别显示 Avatar、真人叠加 Avatar、真人。 */
 export type Condition = 'A' | 'B' | 'C';
 
-/** 版本 B 的头部大小与位置微调。偏移以用户“双眼 → 下巴”的距离为单位。 */
+/** B 组的头部大小与位置微调。偏移以用户脸宽为单位。 */
 export interface HeadLayout {
   scale: number;
   offsetX: number;
   offsetY: number;
 }
 
-export const DEFAULT_HEAD_LAYOUT: HeadLayout = { scale: 0.92, offsetX: 0, offsetY: 0 };
+export const DEFAULT_HEAD_LAYOUT: HeadLayout = { scale: 1.25, offsetX: 0, offsetY: 0 };
 
 export interface Settings {
   version: Version;
@@ -34,12 +33,12 @@ export interface Settings {
   /** 自动大脸构图：根据人脸位置裁切摄像头画面。 */
   autoFrame: boolean;
   cameraZoom: number;
-  background: BackgroundMode;
-  chrome: boolean;
   modelUrl: string;
   calibration: { yaw: number; pitch: number; roll: number };
   preferGpu: boolean;
 }
+
+export type PresentationSettings = Pick<Settings, 'condition' | 'glasses' | 'tracking' | 'layout' | 'headLayout' | 'autoFrame' | 'cameraZoom'>;
 
 export const DEFAULT_SETTINGS: Settings = {
   version: 'A',
@@ -53,8 +52,6 @@ export const DEFAULT_SETTINGS: Settings = {
   layout: { ...DEFAULT_LAYOUT },
   autoFrame: true,
   cameraZoom: 1,
-  background: 'camera',
-  chrome: true,
   modelUrl: 'models/avatar.vrm',
   calibration: { yaw: 0, pitch: 0, roll: 0 },
   preferGpu: true,
@@ -78,6 +75,9 @@ export function loadSettings(): Settings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return structuredClone(DEFAULT_SETTINGS);
     const s = JSON.parse(raw) as Partial<Settings>;
+    const condition = s.condition === 'A' || s.condition === 'B' || s.condition === 'C'
+      ? s.condition
+      : s.version === 'B' ? 'B' : 'A';
     return {
       ...structuredClone(DEFAULT_SETTINGS),
       ...s,
@@ -85,8 +85,8 @@ export function loadSettings(): Settings {
       layout: { ...DEFAULT_LAYOUT, ...(s.layout ?? {}) },
       headLayout: { ...DEFAULT_HEAD_LAYOUT, ...(s.headLayout ?? {}) },
       glasses: { ...DEFAULT_SETTINGS.glasses, ...(s.glasses ?? {}) },
-      version: s.version === 'B' ? 'B' : 'A',
-      condition: s.condition === 'B' || s.condition === 'C' ? s.condition : 'A',
+      version: condition === 'A' ? 'A' : 'B',
+      condition,
       calibration: { ...DEFAULT_SETTINGS.calibration, ...(s.calibration ?? {}) },
     };
   } catch {

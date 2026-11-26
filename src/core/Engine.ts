@@ -1,5 +1,5 @@
 import { Store } from './store';
-import { DEFAULT_SETTINGS, clearSettings, loadSettings, saveSettings, versionFromUrl, type Settings, type Version, type Condition } from './settings';
+import { DEFAULT_SETTINGS, clearSettings, loadSettings, saveSettings, versionFromUrl, type Settings, type Version, type Condition, type PresentationSettings } from './settings';
 import { CameraController, CameraError } from '../tracking/CameraController';
 import { FaceTracker } from '../tracking/FaceTracker';
 import { FaceProcessor } from '../tracking/FaceProcessor';
@@ -20,6 +20,11 @@ import { damp, smoothstep } from '../utils/math';
 export interface ModelEntry {
   name: string;
   url: string;
+}
+
+interface LoadedModel {
+  source: string | File;
+  avatar: Avatar;
 }
 
 export interface LiveValue {
@@ -96,8 +101,12 @@ export class Engine {
   private fpsTimer = 0;
   private recorder: MediaRecorder | null = null;
   private recordStart = 0;
+  private recordPausedAt: number | null = null;
   private msgId = 0;
   private loadToken = 0;
+  private preview: { settings: PresentationSettings; stage: number } | null = null;
+  private previewModel: LoadedModel | null = null;
+  private previewLoadToken = 0;
   private exporting = false;
   private currentModelKey = '';
   private newVideoFrame = false;
@@ -109,6 +118,7 @@ export class Engine {
     const urlVersion = versionFromUrl();
     if (urlVersion) {
       this.settings.version = urlVersion;
+      this.settings.condition = urlVersion;
       saveSettings(this.settings);
     }
     this.processor.update(this.settings.tracking);
@@ -148,6 +158,7 @@ export class Engine {
     this.stopRecording();
     this.camera.stop();
     this.tracker.close();
+    this.clearPreview();
     this.avatar?.dispose();
     this.renderer.dispose();
   }
@@ -318,10 +329,11 @@ export class Engine {
 
   updateSettings(patch: Partial<Settings>): void {
     const next: Settings = { ...this.settings, ...patch };
+    if (patch.condition) next.version = patch.condition === 'A' ? 'A' : 'B';
     if (patch.stageTimes) next.stageTimes = sanitizeStageTimes(patch.stageTimes, STAGES.length);
     if (patch.tracking) {
       next.tracking = { ...this.settings.tracking, ...patch.tracking };
-      this.processor.update(next.tracking);
+      this.processor.update({ ...next.tracking, mirror: this.preview?.settings.tracking.mirror ?? next.tracking.mirror });
     }
     if (patch.layout) next.layout = { ...this.settings.layout, ...patch.layout };
     this.settings = next;
@@ -343,14 +355,13 @@ export class Engine {
 
   /** 切换版本：A 右下角半身 / B 头部叠在脸上。 */
   setVersion(v: Version): void {
-    this.updateSettings({ version: v, condition: v === 'A' ? 'A' : 'B' });
+    this.updateSettings({ condition: v });
     this.toast(v === 'B' ? '版本 B：Avatar 只有头部，叠在用户脸上。' : '版本 A：Avatar 半身在画面右下角。');
   }
 
-  /** 选择实验条件。C 复用头部 Avatar 构图，但隐藏真人摄像头画面。 */
   setCondition(condition: Condition): void {
-    this.updateSettings({ condition, version: condition === 'A' ? 'A' : 'B' });
-    const labels = { A: '短视频 + Avatar：视频 + 右下角角色', B: 'Self + Avatar：真人 + Avatar', C: 'Avatar Only：仅 Avatar' };
+    this.updateSettings({ condition });
+    const labels = { A: '短视频 + Avatar', B: 'Self + Avatar', C: 'Self Only' };
     this.toast(`条件 ${condition}：${labels[condition]}`);
   }
 
@@ -360,6 +371,57 @@ export class Engine {
 
   togglePanel(force?: boolean): void {
     this.store.set((s) => ({ panelVisible: force ?? !s.panelVisible }));
+  }
+
+  // ————————————————— 实时预览 —————————————————
+
+  setPreview(settings: PresentationSettings, stage: number): void {
+    if (!this.preview && this.recorder?.state === 'recording') {
+      this.recordPausedAt = performance.now();
+      this.recorder.pause();
+    }
+    const mirror = this.preview?.settings.tracking.mirror ?? this.settings.tracking.mirror;
+    if (mirror !== settings.tracking.mirror) this.processor.update({ mirror: settings.tracking.mirror });
+    this.preview = { settings, stage };
+  }
+
+  clearPreview(): void {
+    this.preview = null;
+    this.processor.update({ mirror: this.settings.tracking.mirror });
+    this.restorePreviewModel();
+  }
+
+  restorePreviewModel(): void {
+    this.previewLoadToken++;
+    this.previewModel?.avatar.dispose();
+    this.previewModel = null;
+  }
+
+  async loadPreviewModel(src: string | File, progress: (value: number) => void): Promise<boolean> {
+    const token = ++this.previewLoadToken;
+    try {
+      const model = await this.prepareModel(src, (value) => {
+        if (token === this.previewLoadToken) progress(value);
+      });
+      if (token !== this.previewLoadToken) {
+        model.avatar.dispose();
+        return false;
+      }
+      this.previewModel?.avatar.dispose();
+      this.previewModel = model;
+      return true;
+    } catch (error) {
+      if (token !== this.previewLoadToken) return false;
+      throw error;
+    }
+  }
+
+  savePreviewModel(): void {
+    if (!this.previewModel) return;
+    const model = this.previewModel;
+    this.previewModel = null;
+    ++this.loadToken;
+    this.installModel(model);
   }
 
   // ————————————————— 模型 —————————————————
@@ -394,36 +456,14 @@ export class Engine {
     const name = typeof src === 'string' ? src.split('/').pop() ?? src : src.name;
     this.store.set((s) => ({ avatar: { ...s.avatar, status: 'loading', progress: 0, error: null, name } }));
     try {
-      const [textures, options] = await Promise.all([
-        this.textures,
-        typeof src === 'string' ? this.loadModelOptions(src) : Promise.resolve<AvatarOptions>({}),
-      ]);
-      const source = await loadAvatarSource(typeof src === 'string' ? BASE + src : src, (p) => {
+      const model = await this.prepareModel(src, (p) => {
         if (token === this.loadToken) this.store.set((s) => ({ avatar: { ...s.avatar, progress: p } }));
       });
       if (token !== this.loadToken) {
-        source.dispose();
+        model.avatar.dispose();
         return false;
       }
-      const saved = typeof src === 'string' ? loadTuning(src) : null;
-      const avatar = new Avatar(source, textures, { ...options, overlayTuning: { ...(options.overlayTuning ?? {}), ...(saved ?? {}) } });
-      this.swapAvatar(avatar);
-      this.currentModelKey = typeof src === 'string' ? src : `file:${src.name}`;
-      this.store.set({
-        avatar: {
-          status: 'ready',
-          progress: 1,
-          error: null,
-          report: avatar.report,
-          name: source.meta.fileName,
-          localFileName: typeof src === 'string' ? null : src.name,
-          placeholder: false,
-          tuning: avatar.overlayTuning,
-        },
-      });
-      if (typeof src === 'string') this.updateSettings({ modelUrl: src });
-      console.info('[Avatar] 模型能力检查：', avatar.report);
-      for (const w of avatar.report.warnings) console.warn('[Avatar] ', w);
+      this.installModel(model);
       return true;
     } catch (err) {
       if (token !== this.loadToken) return false;
@@ -434,6 +474,42 @@ export class Engine {
       if (!this.avatar) await this.loadPlaceholder(token);
       return false;
     }
+  }
+
+  private async prepareModel(src: string | File, progress: (value: number) => void): Promise<LoadedModel> {
+    const [textures, options] = await Promise.all([
+      this.textures,
+      typeof src === 'string' ? this.loadModelOptions(src) : Promise.resolve<AvatarOptions>({}),
+    ]);
+    const source = await loadAvatarSource(typeof src === 'string' ? BASE + src : src, progress);
+    try {
+      const saved = typeof src === 'string' ? loadTuning(src) : null;
+      const avatar = new Avatar(source, textures, { ...options, overlayTuning: { ...(options.overlayTuning ?? {}), ...(saved ?? {}) } });
+      return { source: src, avatar };
+    } catch (error) {
+      source.dispose();
+      throw error;
+    }
+  }
+
+  private installModel({ source, avatar }: LoadedModel): void {
+    this.swapAvatar(avatar);
+    this.currentModelKey = typeof source === 'string' ? source : `file:${source.name}`;
+    this.store.set({
+      avatar: {
+        status: 'ready',
+        progress: 1,
+        error: null,
+        report: avatar.report,
+        name: avatar.source.meta.fileName,
+        localFileName: typeof source === 'string' ? null : source.name,
+        placeholder: false,
+        tuning: avatar.overlayTuning,
+      },
+    });
+    if (typeof source === 'string') this.updateSettings({ modelUrl: source });
+    console.info('[Avatar] 模型能力检查：', avatar.report);
+    for (const w of avatar.report.warnings) console.warn('[Avatar] ', w);
   }
 
   private async loadPlaceholder(token: number): Promise<void> {
@@ -512,8 +588,16 @@ export class Engine {
     this.fatigue.transitionSec = fast ? this.settings.manualTransitionSec : this.settings.transitionSec;
     const params = this.fatigue.update(dt);
 
-    // 3) 角色
-    this.renderFrame(params, dt, fr.present || this.presence > 0.001 ? fr : null);
+    // 3) 实验画面，或用相同合成路径绘制调参草稿
+    const view = this.preview?.settings ?? this.settings;
+    const avatar = view.condition === 'C' ? null : this.previewModel?.avatar ?? this.avatar;
+    const visualParams = this.preview ? STAGES[this.preview.stage].params : params;
+    this.renderFrame(view, avatar, visualParams, dt, fr.present || this.presence > 0.001 ? fr : null);
+    if (!this.preview && this.recordPausedAt !== null && this.recorder?.state === 'paused') {
+      this.recordStart += now - this.recordPausedAt;
+      this.recordPausedAt = null;
+      this.recorder.resume();
+    }
 
     // 4) 界面状态（10Hz）
     this.frames++;
@@ -530,68 +614,62 @@ export class Engine {
     if (this.uiTimer >= 0.1) {
       this.uiTimer = 0;
       this.pushExperiment();
-      const finalCh = this.avatar?.channels;
+      const finalCh = avatar?.channels;
       this.store.set((s) => ({
         tracker: { ...s.tracker, face: seen, presence: this.presence },
         live: {
           values: LIVE_KEYS.map((k) => ({ name: k, capture: fr.channels[k] * this.presence, final: finalCh ? finalCh[k] : 0 })),
           head: { yaw: fr.head.yaw * 57.3, pitch: fr.head.pitch * 57.3, roll: fr.head.roll * 57.3 },
         },
-        recording: this.recorder ? { ...s.recording, seconds: (performance.now() - this.recordStart) / 1000 } : s.recording,
+        recording: this.recorder ? { ...s.recording, seconds: ((this.recordPausedAt ?? performance.now()) - this.recordStart) / 1000 } : s.recording,
       }));
       if (this.camera.status === 'off' && this.store.get().camera.status === 'on') this.stopCamera();
     }
   };
 
-  private renderFrame(params: FatigueParams, dt: number, face: typeof this.processor.frame | null): void {
-    const s = this.settings;
-    const headMode = s.condition !== 'A';
-    if (this.avatar) {
-      this.avatar.setMode(headMode ? 'head' : 'corner');
-      this.avatar.setGlasses(!!s.glasses[s.version]);
-      this.avatar.update({ face, presence: this.presence, fatigue: params, time: this.time, dt });
-    }
+  private renderFrame(s: PresentationSettings, avatar: Avatar | null, params: FatigueParams, dt: number, face: typeof this.processor.frame | null): void {
+    const headMode = s.condition === 'B';
+    const cameraWindow = s.condition !== 'A';
     const rect = this.compositor.avatarRectFor(s.layout);
     let headOverlay: HeadOverlayInput | null = null;
-    if (headMode) {
-      this.renderer.setSize(HEAD_PX, HEAD_PX);
-      this.renderer.frameHead();
+    if (this.renderer.avatar !== avatar) this.renderer.setAvatar(avatar);
+    if (avatar) {
+      avatar.setMode(headMode ? 'head' : 'corner');
+      avatar.setGlasses(!!s.glasses[headMode ? 'B' : 'A']);
+      if (headMode) {
+        this.renderer.setSize(HEAD_PX, HEAD_PX);
+        this.renderer.frameHead();
+      } else {
+        this.renderer.setSize(rect.w, rect.h);
+        this.renderer.frame(s.layout);
+      }
+      avatar.update({ face, presence: this.presence, fatigue: params, time: this.time, dt });
       this.renderer.render();
-      if (this.avatar) headOverlay = this.headOverlayInput();
-    } else {
-      this.renderer.setSize(rect.w, rect.h);
-      this.renderer.frame(s.layout);
-      this.renderer.render();
+      if (headMode) headOverlay = this.headOverlayInput(avatar, s.headLayout);
     }
-    const d = new Date();
     this.compositor.draw({
-      video: this.camera.active && s.condition === 'B' ? this.camera.video : null,
+      video: this.camera.active && cameraWindow ? this.camera.video : null,
       mirror: s.tracking.mirror,
-      background: s.condition === 'A' ? 'transparent' : s.condition === 'C' ? 'dark' : s.background,
+      cameraRect: cameraWindow ? rect : null,
       cameraZoom: s.cameraZoom,
       autoFrame: s.autoFrame,
-      faceFraction: headMode ? 0.3 : 0.4,
       faceBox: this.presence > 0.5 ? this.processor.frame.box : null,
-      avatar: this.avatar && !headMode ? this.renderer.canvas : null,
+      avatar: avatar && !headMode ? this.renderer.canvas : null,
       avatarRect: rect,
       headOverlay,
-      chrome: headMode && s.chrome,
-      clock: `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`,
       dt,
     });
   }
 
   /** 版本 B：头部画布 + 对齐信息。摄像头开着但没检测到人脸时淡出；摄像头关闭时放在画面中央。 */
-  private headOverlayInput(): HeadOverlayInput | null {
-    if (!this.avatar) return null;
-    const pts = this.avatar.headPoints();
+  private headOverlayInput(avatar: Avatar, hl: Settings['headLayout']): HeadOverlayInput {
+    const pts = avatar.headPoints();
     const chinPx = this.renderer.project(pts.chin);
-    const widthPx = this.avatar.faceWidth * this.renderer.pixelsPerMeter(pts.eyeMid);
+    const widthPx = avatar.faceWidth * this.renderer.pixelsPerMeter(pts.eyeMid);
     const camOn = this.camera.active;
     const points = this.processor.frame.points;
     const face = camOn && points && this.presence > 0.01 ? points : null;
     const opacity = camOn ? smoothstep(0.02, 0.5, this.presence) : 1;
-    const hl = this.settings.headLayout;
     return {
       canvas: this.renderer.canvas,
       chinPx,
@@ -614,12 +692,15 @@ export class Engine {
   }
 
   snapshot(): void {
+    if (this.preview) return;
     const stage = this.store.get().experiment.stage;
-    this.compositor.canvas.toBlob((b) => b && download(b, `beyond-the-mirror_${this.settings.version}_stage${stage}_${this.stamp()}.png`), 'image/png');
+    const condition = this.settings.condition;
+    this.compositor.canvas.toBlob((b) => b && download(b, `beyond-the-mirror_${condition}_stage${stage}_${this.stamp()}.png`), 'image/png');
   }
 
   /** 导出当前角色（透明背景 PNG）。 */
   exportAvatarPng(): void {
+    if (this.preview || this.settings.condition === 'C' || this.renderer.avatar !== this.avatar) return;
     const stage = this.store.get().experiment.stage;
     this.renderer.canvas.toBlob((b) => b && download(b, `avatar_stage${stage}_${this.stamp()}.png`), 'image/png');
   }
@@ -629,9 +710,12 @@ export class Engine {
    * 渲染到一张横排图里，适合直接放进 Poster。
    */
   async exportStageSheet(): Promise<void> {
-    if (!this.avatar || this.exporting) return;
+    if (!this.avatar || this.exporting || this.preview || this.settings.condition === 'C') return;
     this.exporting = true;
-    const headMode = this.settings.version === 'B';
+    const headMode = this.settings.condition === 'B';
+    this.renderer.setAvatar(this.avatar);
+    this.avatar.setMode(headMode ? 'head' : 'corner');
+    this.avatar.setGlasses(this.settings.glasses[headMode ? 'B' : 'A']);
     const cellW = 720;
     const cellH = headMode ? 720 : 960;
     const pad = 40;
@@ -679,7 +763,7 @@ export class Engine {
   }
 
   startRecording(): void {
-    if (this.recorder) return;
+    if (this.recorder || this.preview) return;
     if (typeof MediaRecorder === 'undefined') {
       this.toast('当前浏览器不支持 MediaRecorder 录制，请改用系统录屏。', 'error');
       return;
@@ -690,13 +774,14 @@ export class Engine {
     const stream = this.compositor.canvas.captureStream(30);
     const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12_000_000 });
     const chunks: Blob[] = [];
+    const condition = this.settings.condition;
     rec.ondataavailable = (e) => {
       if (e.data.size) chunks.push(e.data);
     };
     rec.onstop = () => {
       const type = rec.mimeType || mime || 'video/webm';
       const ext = type.includes('mp4') ? 'mp4' : 'webm';
-      download(new Blob(chunks, { type }), `beyond-the-mirror_${this.settings.version}_demo_${this.stamp()}.${ext}`);
+      download(new Blob(chunks, { type }), `beyond-the-mirror_${condition}_demo_${this.stamp()}.${ext}`);
       stream.getTracks().forEach((t) => t.stop());
     };
     rec.start(1000);
@@ -709,6 +794,7 @@ export class Engine {
     if (!this.recorder) return;
     this.recorder.stop();
     this.recorder = null;
+    this.recordPausedAt = null;
     this.store.set((s) => ({ recording: { ...s.recording, active: false } }));
   }
 

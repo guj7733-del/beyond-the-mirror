@@ -6,16 +6,14 @@ import { DEFAULT_TRACKING, type TrackingSettings } from '../tracking/FaceProcess
 import { DEFAULT_STAGE_TIMES } from '../fatigue/stages';
 import { formatTime } from '../utils/math';
 import { DebugPanel } from './DebugPanel';
-import { AvatarSettings } from './AvatarSettings';
 import { Section, Slider, Toggle } from './SettingFields';
-import type { BackgroundMode } from '../render/Compositor';
 
-export function ControlPanel({ ui }: { ui: UiState }) {
+export function ControlPanel({ ui, onOpenSettings }: { ui: UiState; onOpenSettings: () => void }) {
   const s = ui.settings;
   const ex = ui.experiment;
   const stage = STAGES[ex.stage];
   const maxT = Math.max(120, Math.ceil((s.stageTimes[s.stageTimes.length - 1] + 30) / 10) * 10);
-  const isB = s.condition !== 'A';
+  const showsAvatar = s.condition !== 'C';
   const setTracking = (p: Partial<TrackingSettings>) => engine.updateSettings({ tracking: { ...s.tracking, ...p } });
   const [timesDraft, setTimesDraft] = useState<string[] | null>(null);
   const times = timesDraft ?? s.stageTimes.map(String);
@@ -34,16 +32,17 @@ export function ControlPanel({ ui }: { ui: UiState }) {
       </header>
 
       <div className="version-switch" role="group" aria-label="实验条件">
-        <button className={`btn ${s.condition === 'A' ? 'active' : ''}`} onClick={() => engine.setCondition('A')} title="播放短视频，右下角显示 Avatar">
+        <button className={`btn ${s.condition === 'A' ? 'active' : ''}`} aria-pressed={s.condition === 'A'} onClick={() => engine.setCondition('A')} title="右下角显示 Avatar">
           <b>A · 短视频 + Avatar</b><span>视频 + 角色</span>
         </button>
-        <button className={`btn ${s.condition === 'B' ? 'active' : ''}`} onClick={() => engine.setCondition('B')} title="Self + Avatar：真人与 Avatar 同时显示">
+        <button className={`btn ${s.condition === 'B' ? 'active' : ''}`} aria-pressed={s.condition === 'B'} onClick={() => engine.setCondition('B')} title="右下角显示真人叠加 Avatar">
           <b>B · Self + Avatar</b><span>真人 + Avatar</span>
         </button>
-        <button className={`btn ${s.condition === 'C' ? 'active' : ''}`} onClick={() => engine.setCondition('C')} title="Avatar Only：隐藏真人画面，保留面捕驱动 Avatar">
-          <b>C · Avatar Only</b><span>仅 Avatar</span>
+        <button className={`btn ${s.condition === 'C' ? 'active' : ''}`} aria-pressed={s.condition === 'C'} onClick={() => engine.setCondition('C')} title="右下角显示用户摄像头">
+          <b>C · Self Only</b><span>真人画面</span>
         </button>
       </div>
+      <button className="btn settings-entry" onClick={onOpenSettings}>实验设置与实时预览</button>
 
       <Section title="实验 Experiment" sub={ex.status === 'ended' ? '已结束' : ex.running ? '计时中' : '已暂停'}>
         <div className="readout">
@@ -150,37 +149,10 @@ export function ControlPanel({ ui }: { ui: UiState }) {
           </p>
         )}
         {cam.error && <p className="err">{cam.error}</p>}
-        <div className="row wrap">
-          <Toggle label="镜像" checked={s.tracking.mirror} onChange={(v) => setTracking({ mirror: v })} />
-          {isB && <Toggle label="自动大脸构图" checked={s.autoFrame} onChange={(v) => engine.updateSettings({ autoFrame: v })} />}
-        </div>
-        {isB && <Slider label="画面缩放" value={s.cameraZoom} min={1} max={2.5} step={0.05} onChange={(v) => engine.updateSettings({ cameraZoom: v })} />}
+        <Toggle label="镜像" checked={s.tracking.mirror} onChange={(v) => setTracking({ mirror: v })} />
       </Section>
 
-      <Section title="角色 Avatar" sub={ui.avatar.status === 'ready' ? ui.avatar.name : ui.avatar.status === 'loading' ? '加载中' : ''}>
-        <AvatarSettings
-          settings={s}
-          condition={s.condition}
-          version={s.version}
-          models={ui.models}
-          modelUrl={s.modelUrl}
-          localFileName={ui.avatar.localFileName}
-          onModelChange={(source) => { void engine.loadModel(source); }}
-          onChange={(patch) => engine.updateSettings(patch)}
-        >
-          {ui.avatar.status === 'loading' && <progress value={ui.avatar.progress} max={1} />}
-          {ui.avatar.error && <p className="err">{ui.avatar.error}</p>}
-          {ui.avatar.placeholder && <p className="warn-text">当前显示的是占位角色。</p>}
-          {ui.avatar.report && (
-            <p className={ui.avatar.report.warnings.length ? 'warn-text' : 'muted'}>
-              {ui.avatar.report.meta.specVersion} · ARKit 直连 {ui.avatar.report.counts.direct}/52
-              {ui.avatar.report.warnings.length ? ` · 模型检查有 ${ui.avatar.report.warnings.length} 条提示，详见“调试 → 模型检查”` : ' · 模型检查无异常'}
-            </p>
-          )}
-        </AvatarSettings>
-      </Section>
-
-      <Section title="贴片微调 Overlay" sub="替换模型后对齐眼部效果" open={false}>
+      {showsAvatar && <Section title="贴片微调 Overlay" sub="替换模型后对齐眼部效果" open={false}>
         {ui.avatar.tuning && (
           <>
             <Slider label="黑眼圈上下" value={ui.avatar.tuning.darkCircleOffsetY} min={-1} max={1} step={0.02} onChange={(v) => engine.setOverlayTuning({ darkCircleOffsetY: v })} />
@@ -200,7 +172,7 @@ export function ControlPanel({ ui }: { ui: UiState }) {
             </div>
           </>
         )}
-      </Section>
+      </Section>}
 
       <Section title="面捕参数 Tracking" open={false}>
         <Slider label="平滑强度" value={s.tracking.smoothing} min={0} max={1} step={0.05} onChange={(v) => setTracking({ smoothing: v })} />
@@ -222,36 +194,14 @@ export function ControlPanel({ ui }: { ui: UiState }) {
           <button className="btn" onClick={() => engine.snapshot()}>
             截图 PNG
           </button>
-          <button className="btn" onClick={() => engine.exportAvatarPng()}>
-            角色透明 PNG
-          </button>
-          <button className="btn" onClick={() => engine.exportStageSheet()}>
-            导出六阶段立绘
-          </button>
+          {showsAvatar && (
+            <>
+              <button className="btn" onClick={() => engine.exportAvatarPng()}>角色透明 PNG</button>
+              <button className="btn" onClick={() => engine.exportStageSheet()}>导出六阶段立绘</button>
+            </>
+          )}
         </div>
-        <p className="hint">
-          {isB ? '录制左侧 9:16 画面（1080×1920，30fps），浏览器支持时为 MP4，否则为 WebM。' : '截图和录制仅采集角色画布。需要同时录下短视频和角色时，请使用系统录屏。'}
-        </p>
-        {isB && (
-          <>
-            <div className="row wrap">
-              <span className="muted">背景</span>
-              {(
-                [
-                  ['camera', '摄像头'],
-                  ['dark', '深色'],
-                  ['green', '绿幕'],
-                  ['transparent', '透明'],
-                ] as [BackgroundMode, string][]
-              ).map(([k, label]) => (
-                <button key={k} className={`btn small ${s.background === k ? 'active' : ''}`} onClick={() => engine.updateSettings({ background: k })}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <Toggle label="显示短视频界面元素" checked={s.chrome} onChange={(v) => engine.updateSettings({ chrome: v })} />
-          </>
-        )}
+        <p className="hint">截图和录制采集右下角小窗图层。要连同短视频一起录制，请使用系统录屏。</p>
       </Section>
 
       <Section title="调试 Debug" open={false}>

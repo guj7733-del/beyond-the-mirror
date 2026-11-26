@@ -1,13 +1,21 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { engine, useUi } from './ui/engine';
 import { ControlPanel } from './ui/ControlPanel';
 import { LocalVideos } from './ui/LocalVideos';
-import { MobileExperiment } from './ui/MobileExperiment';
+import { ExperimentHotspot, ExperimentSettings, type ExperimentSettingsEntry } from './ui/ExperimentSettings';
 import { STAGES } from './fatigue/stages';
 
 export function App() {
   const ui = useUi();
   const stageRef = useRef<HTMLDivElement>(null);
+  const activeVideo = useRef<HTMLVideoElement>(null);
+  const [settingsEntry, setSettingsEntry] = useState<ExperimentSettingsEntry | null>(null);
+
+  const openSettings = useCallback(() => {
+    const { status } = engine.store.get().experiment;
+    if (status === 'running') engine.pauseExperiment();
+    setSettingsEntry({ confirmEnd: status === 'running' || status === 'paused', wasRunning: status === 'running' });
+  }, []);
 
   useEffect(() => {
     const host = stageRef.current;
@@ -46,27 +54,26 @@ export function App() {
 
   const cam = ui.camera;
   const stage = STAGES[ui.experiment.stage];
-  const showVideoFeed = ui.settings.condition === 'A';
+  const showsAvatar = ui.settings.condition !== 'C';
   return (
     <div className={`app ${ui.panelVisible ? '' : 'presenting'}`}>
       <main className="stage">
         <div className="phone" ref={stageRef}>
-          <LocalVideos visible={showVideoFeed} />
-          {cam.status !== 'on' && (showVideoFeed || ui.settings.background === 'camera') && (
-            <div className={`phone-overlay${showVideoFeed ? ' phone-overlay-corner' : ''}`}>
-              <button className={`btn primary${showVideoFeed ? '' : ' big'}`} onClick={() => engine.startCamera()} disabled={cam.status === 'starting'}>
+          <LocalVideos activeVideo={activeVideo} />
+          {cam.status !== 'on' && (
+            <div className="phone-overlay">
+              <button className="btn primary" onClick={() => engine.startCamera()} disabled={cam.status === 'starting'}>
                 {cam.status === 'starting' ? '正在开启摄像头…' : 'Start Camera 开启摄像头'}
               </button>
-              {!showVideoFeed && <p className="privacy">画面只在本机浏览器内处理，不上传、不保存。</p>}
               {cam.error && <p className="err">{cam.error}</p>}
             </div>
           )}
-          {cam.status === 'on' && !ui.tracker.face && ui.tracker.status === 'ready' && (
+          {showsAvatar && cam.status === 'on' && !ui.tracker.face && ui.tracker.status === 'ready' && (
             <div className="chip warn">未检测到人脸</div>
           )}
-          {ui.avatar.status === 'loading' && <div className="chip info">模型加载中 {Math.round(ui.avatar.progress * 100)}%</div>}
+          {showsAvatar && ui.avatar.status === 'loading' && <div className="chip info">模型加载中 {Math.round(ui.avatar.progress * 100)}%</div>}
           {ui.recording.active && <div className="chip rec">● REC {ui.recording.seconds.toFixed(0)}s</div>}
-          <MobileExperiment stageRef={stageRef} ui={ui} />
+          <ExperimentHotspot stageRef={stageRef} onOpen={openSettings} />
         </div>
         {!ui.panelVisible && (
           <div className="present-hint">
@@ -74,7 +81,8 @@ export function App() {
           </div>
         )}
       </main>
-      {ui.panelVisible && <ControlPanel ui={ui} />}
+      {ui.panelVisible && <ControlPanel ui={ui} onOpenSettings={openSettings} />}
+      {settingsEntry && <ExperimentSettings ui={ui} entry={settingsEntry} activeVideo={activeVideo} onClose={() => setSettingsEntry(null)} />}
       {ui.message && <Toast key={ui.message.id} text={ui.message.text} kind={ui.message.kind} />}
     </div>
   );

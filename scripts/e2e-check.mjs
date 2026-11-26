@@ -9,7 +9,7 @@
  * 视频转换示例（需要 ffmpeg）：
  *   ffmpeg -i face.mp4 -vf "scale=1280:720,fps=25" -q:v 4 -f mjpeg face.mjpeg
  *
- * 结果：终端打印每一项检查的 PASS / FAIL（版本 A、版本 B 都会检查），截图与录屏保存在 e2e-output/。
+ * 结果：终端打印每一项检查的 PASS / FAIL，截图与录屏保存在 e2e-output/。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -278,10 +278,127 @@ try {
   const back = await page.evaluate(() => ({ mode: window.bm.avatar.mode, hidden: window.bm.avatar.bodyMeshes.filter((m) => !m.visible).length }));
   check('切回版本 A：身体恢复显示', back.mode === 'corner' && back.hidden === 0);
 
-  // 10. 关闭摄像头
+  // 10. 桌面调参：实时预览、取消、各组共用小窗和短视频。
+  await feed.evaluate((element) => { element.scrollTop = 3 * element.clientHeight; });
+  await videoPlaying(4);
+  await activePlayer.evaluate((player) => { player.dataset.sameFeed = 'true'; });
+  const openSettings = page.getByRole('button', { name: '实验设置与实时预览' });
+  await openSettings.click();
+  const settings = page.getByRole('dialog', { name: '实验设置与实时预览' });
+  const initialA = await page.evaluate(() => ({
+    distance: window.bm.renderer.camera.position.z,
+    zoom: window.bm.store.get().settings.layout.zoom,
+  }));
+  await settings.getByRole('slider', { name: '角色缩放' }).press('End');
+  await page.waitForFunction((distance) => window.bm.renderer.camera.position.z < distance, initialA.distance);
+  check('A 组：拖动参数实时改变 Avatar，草稿未保存', await page.evaluate((zoom) => {
+    const canvas = window.bm.compositor.canvas;
+    const frame = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    return frame.some((alpha, i) => i % 4 === 3 && alpha > 0)
+      && window.bm.store.get().settings.layout.zoom === zoom;
+  }, initialA.zoom));
+  await settings.getByRole('button', { name: '取消' }).click();
+  await page.waitForFunction((distance) => window.bm.renderer.camera.position.z === distance, initialA.distance);
+  check('取消调参恢复 A 组画面', await settings.count() === 0);
+
+  await openSettings.click();
+  const conditionSelect = settings.getByLabel('实验条件');
+  await conditionSelect.selectOption('B');
+  await settings.getByRole('button', { name: '关闭摄像头' }).click();
+  await settings.getByRole('button', { name: '开启摄像头' }).click();
+  await page.waitForFunction(() => window.bm.store.get().camera.status === 'on');
+  if (!video) {
+    await page.evaluate(() => {
+      // 用确定的人脸点验证叠加流程，摄像头底图仍来自 Chrome 假设备。
+      window.bm.tracker.detect = () => ({
+        blendshapes: {},
+        matrix: null,
+        box: { cx: 0.5, cy: 0.45, w: 0.16, h: 0.26 },
+        points: {
+          eyeMid: [0.5, 0.42, 0], chin: [0.5, 0.56, 0], forehead: [0.5, 0.32, 0],
+          cheekL: [0.55, 0.5, 0], cheekR: [0.45, 0.5, 0],
+        },
+      });
+    });
+  }
+  await page.waitForFunction(() => window.bm.debugState().headPlacement?.fromFace, null, { timeout: 15000 });
+  const originalHead = await page.evaluate(() => {
+    const p = window.bm.debugState().headPlacement;
+    return p.w / p.faceW;
+  });
+  await settings.getByRole('slider', { name: '贴脸大小' }).press('End');
+  await page.waitForFunction((original) => {
+    const p = window.bm.debugState().headPlacement;
+    return p?.fromFace && p.w / p.faceW > original * 1.5;
+  }, originalHead);
+  const cameraWindowIsClipped = () => page.evaluate(() => {
+    const { compositor, camera } = window.bm;
+    const ctx = compositor.canvas.getContext('2d');
+    const rect = compositor.avatarRectFor(window.bm.store.get().settings.layout);
+    const top = Math.ceil(rect.y);
+    const middle = Math.round(rect.x + rect.w / 2);
+    const alphaAt = (x, y) => ctx.getImageData(x, y, 1, 1).data[3];
+    return camera.video.currentTime > 0 && alphaAt(middle, top + 4) === 255 && alphaAt(middle, top - 4) === 0;
+  });
+  check('B 组：真人摄像头和实时变大的 Avatar 都裁切在右下角小窗中', await cameraWindowIsClipped());
+  await settings.screenshot({ path: path.join(OUT, '07_desktop_live_preview.png') });
+
+  await conditionSelect.selectOption('C');
+  await page.waitForFunction(() => window.bm.debugState().headPlacement === null && window.bm.renderer.avatar === null);
+  check('C 组：相同小窗显示摄像头，移除 Avatar', await cameraWindowIsClipped());
+  await settings.getByRole('button', { name: '保存设置', exact: true }).click();
+  check('保存设置保留 B 组倍率与 C 组选项，计时保持停止', await page.evaluate(() => {
+    const state = window.bm.store.get();
+    const saved = JSON.parse(localStorage.getItem('beyond-the-mirror/settings/v1'));
+    return state.settings.condition === 'C' && state.experiment.status === 'idle' && saved.headLayout.scale === 3;
+  }));
+  await videoPlaying(4);
+  check('切换组别沿用当前短视频，不重建播放器', await activePlayer.getAttribute('data-same-feed') === 'true' && await feed.locator('.video-slide').count() === 8);
+
+  await openSettings.click();
+  await conditionSelect.selectOption('B');
+  await settings.getByText('角色模型', { exact: true }).click();
+  await settings.getByRole('combobox', { name: '角色模型' }).selectOption('models/samples/PS_Female.vrm');
+  await page.waitForFunction(() => window.bm.renderer.avatar?.source.meta.fileName === 'PS_Female.vrm');
+  check('更换角色模型会立即预览，保存前实验模型保持原样', await page.evaluate(() => window.bm.avatar.source.meta.fileName === 'avatar.vrm'));
+  await settings.getByRole('button', { name: '保存并开始' }).click();
+  await page.waitForFunction(() => window.bm.store.get().experiment.running);
+  check('保存并开始应用模型后开启新一轮', await page.evaluate(() => window.bm.store.get().settings.modelUrl === 'models/samples/PS_Female.vrm'));
+  await openSettings.click();
+  const confirmEnd = page.getByRole('dialog', { name: '结束本轮实验？' });
+  await confirmEnd.getByRole('button', { name: '继续实验' }).click();
+  check('关闭结束确认后恢复本轮计时', await page.evaluate(() => window.bm.store.get().experiment.running));
+  await openSettings.click();
+  await confirmEnd.getByRole('button', { name: '结束本轮并设置' }).click();
+  await settings.getByRole('button', { name: '保存设置', exact: true }).click();
+  check('结束本轮后可保存参数，计时保持已结束', await page.evaluate(() => window.bm.store.get().experiment.status === 'ended'));
+
+  // 11. 关闭摄像头并用触屏入口打开同一调参界面。
   await page.evaluate(() => window.bm.stopCamera());
   await page.waitForTimeout(300);
   check('关闭摄像头', (await page.evaluate(() => window.bm.store.get().camera.status)) === 'off');
+
+  const mobileContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const mobilePage = await mobileContext.newPage();
+  mobilePage.on('pageerror', (e) => pageErrors.push(e.message));
+  await mobilePage.goto(new URL('?v=B', url).href);
+  const hotspot = await mobilePage.locator('.experiment-hotspot').boundingBox();
+  const touch = await mobileContext.newCDPSession(mobilePage);
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: hotspot.x + 4, y: hotspot.y + 4 }] });
+  const mobileSettings = mobilePage.getByRole('dialog', { name: '实验设置与实时预览' });
+  await mobileSettings.waitFor();
+  await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  const mobilePreview = mobileSettings.locator('.preview-frame');
+  const previewTop = (await mobilePreview.boundingBox()).y;
+  await mobileSettings.getByText('阶段时间与过渡').click();
+  const scrolled = await mobileSettings.locator('.experiment-sheet-body').evaluate((body) => {
+    body.scrollTop = body.scrollHeight;
+    return body.scrollTop > 0;
+  });
+  check('手机长按打开 B 组调参，滚动参数时实时预览留在视野中', scrolled && Math.abs((await mobilePreview.boundingBox()).y - previewTop) < 1);
+  await mobileSettings.screenshot({ path: path.join(OUT, '08_mobile_live_preview.png') });
+  await mobileContext.close();
+
   check('页面无未捕获异常', pageErrors.length === 0, pageErrors.slice(0, 3).join(' | '));
 } catch (err) {
   check('自检过程未中断', false, String(err?.message ?? err));

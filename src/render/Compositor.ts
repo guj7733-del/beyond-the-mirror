@@ -1,9 +1,6 @@
-import { drawChrome } from './chrome';
 import { damp } from '../utils/math';
 import type { FacePoints } from '../tracking/FaceTracker';
 import { computeHeadPlacement, type CropInfo, type Placement } from './headPlacement';
-
-export type BackgroundMode = 'camera' | 'dark' | 'green' | 'transparent';
 
 export interface Rect {
   x: number;
@@ -36,34 +33,27 @@ export interface HeadOverlayInput {
 
 export type HeadPlacement = Placement;
 
-type Crop = CropInfo;
-
 export interface CompositeInput {
   video: HTMLVideoElement | null;
   mirror: boolean;
-  background: BackgroundMode;
+  cameraRect: Rect | null;
   cameraZoom: number;
   autoFrame: boolean;
-  /** 自动构图时脸高占画面高度的比例（版本 A 0.4；版本 B 留出肩膀和符号的位置，0.3）。 */
-  faceFraction?: number;
   faceBox: { cx: number; cy: number; w: number; h: number } | null;
   avatar: HTMLCanvasElement | null;
   avatarRect: Rect;
   headOverlay?: HeadOverlayInput | null;
-  chrome: boolean;
-  clock: string;
   dt: number;
 }
 
 /**
- * 9:16 合成器：摄像头画面 → Avatar（透明背景）→ 短视频界面。
- * 条件 A 只绘制透明背景的 Avatar，播放器单独显示在画布下面。
+ * 把 Avatar 或摄像头画面画在右下角，保留其余区域透明。
+ * 短视频由画布下方的播放器显示。
  */
 export class Compositor {
   readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private crop = { cx: 0.5, cy: 0.5, zoom: 1, init: false };
-  private lastCrop: Crop | null = null;
   /** 最近一次头部叠加的位置（调试与自动测试用）。 */
   lastHead: HeadPlacement | null = null;
 
@@ -91,36 +81,45 @@ export class Compositor {
   draw(i: CompositeInput): void {
     const { ctx, width: W, height: H } = this;
     ctx.clearRect(0, 0, W, H);
-    const v = i.video;
-    const hasVideo = !!v && v.readyState >= 2 && v.videoWidth > 0;
-    // 裁切框每帧都更新（即使背景不是摄像头），这样版本 B 的头部在任何背景下都跟着脸走
-    this.lastCrop = hasVideo ? this.updateCrop(v!, i) : null;
-    if (i.background === 'camera' && hasVideo) this.drawVideo(v!, this.lastCrop!, i.mirror);
-    else if (i.background === 'green') {
-      ctx.fillStyle = '#00b140';
-      ctx.fillRect(0, 0, W, H);
-    } else if (i.background !== 'transparent') {
-      const g = ctx.createLinearGradient(0, 0, 0, H);
-      g.addColorStop(0, '#2a2d36');
-      g.addColorStop(1, '#121318');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, W, H);
-    }
+    this.lastHead = null;
 
+    if (i.cameraRect) this.drawCameraWindow(i.cameraRect, i);
+    else this.crop.init = false;
     if (i.avatar) {
       const r = i.avatarRect;
       ctx.drawImage(i.avatar, r.x, r.y, r.w, r.h);
     }
-    this.lastHead = i.headOverlay ? this.drawHead(i.headOverlay, i.mirror) : null;
-    if (i.chrome) drawChrome(ctx, W, H, i.clock);
   }
 
-  private drawHead(h: HeadOverlayInput, mirror: boolean): HeadPlacement | null {
-    if (h.opacity <= 0.01) return null;
+  private drawCameraWindow(rect: Rect, i: CompositeInput): void {
+    const { ctx } = this;
+    const { x, y, w, h } = rect;
+    const v = i.video;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    ctx.clip();
+    let crop: CropInfo | null = null;
+    if (v && v.readyState >= 2 && v.videoWidth > 0) {
+      crop = this.updateCrop(v, rect, i);
+      this.drawVideo(v, crop, rect, i.mirror);
+    } else {
+      this.crop.init = false;
+      ctx.fillStyle = '#181a21';
+      ctx.fillRect(0, 0, w, h);
+    }
+    if (i.headOverlay && i.headOverlay.opacity > 0.01) {
+      this.lastHead = this.drawHead(i.headOverlay, rect, crop, i.mirror);
+    }
+    ctx.restore();
+  }
+
+  private drawHead(h: HeadOverlayInput, rect: Rect, crop: CropInfo | null, mirror: boolean): HeadPlacement {
     const p = computeHeadPlacement({
-      W: this.width,
-      H: this.height,
-      crop: this.lastCrop,
+      W: rect.w,
+      H: rect.h,
+      crop,
       mirror,
       face: h.face,
       restChinRatio: h.restChinRatio,
@@ -137,14 +136,19 @@ export class Compositor {
     ctx.globalAlpha = Math.min(1, h.opacity);
     ctx.drawImage(h.canvas, p.x, p.y, p.w, p.h);
     ctx.restore();
-    return p;
+    return {
+      ...p,
+      x: p.x + rect.x,
+      y: p.y + rect.y,
+      eye: { x: p.eye.x + rect.x, y: p.eye.y + rect.y },
+      chin: { x: p.chin.x + rect.x, y: p.chin.y + rect.y },
+    };
   }
 
-  private updateCrop(v: HTMLVideoElement, i: CompositeInput): Crop {
-    const { width: W, height: H } = this;
+  private updateCrop(v: HTMLVideoElement, rect: Rect, i: CompositeInput): CropInfo {
     const vw = v.videoWidth;
     const vh = v.videoHeight;
-    const aspect = W / H;
+    const aspect = rect.w / rect.h;
     // cover 裁切的基础尺寸
     let baseW = vw;
     let baseH = vw / aspect;
@@ -152,14 +156,13 @@ export class Compositor {
       baseH = vh;
       baseW = vh * aspect;
     }
-    // 目标：手动缩放，或自动大脸构图（脸高约占画面 40%（版本 B 为 30%），脸位于画面 40% 高度处）
+    // 自动构图让脸部约占小窗高度的 30%，脸位于画面高度的 40% 处。
     let targetZoom = Math.max(1, i.cameraZoom);
     let tcx = 0.5;
     let tcy = 0.5;
     if (i.autoFrame && i.faceBox && i.faceBox.h > 0.02) {
       const faceHpx = i.faceBox.h * vh;
-      const frac = i.faceFraction ?? 0.4;
-      targetZoom = Math.min(2.6, Math.max(1, (frac * baseH) / faceHpx)) * Math.max(1, i.cameraZoom);
+      targetZoom = Math.min(2.6, Math.max(1, (0.3 * baseH) / faceHpx)) * targetZoom;
       const cropH = baseH / targetZoom;
       tcx = i.faceBox.cx;
       tcy = (i.faceBox.cy * vh + 0.1 * cropH) / vh;
@@ -185,14 +188,14 @@ export class Compositor {
     return { sx, sy, sw, sh, vw, vh };
   }
 
-  private drawVideo(v: HTMLVideoElement, crop: Crop, mirror: boolean): void {
-    const { ctx, width: W, height: H } = this;
+  private drawVideo(v: HTMLVideoElement, crop: CropInfo, { w, h }: Rect, mirror: boolean): void {
+    const { ctx } = this;
     ctx.save();
     if (mirror) {
-      ctx.translate(W, 0);
+      ctx.translate(w, 0);
       ctx.scale(-1, 1);
     }
-    ctx.drawImage(v, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, W, H);
+    ctx.drawImage(v, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, w, h);
     ctx.restore();
   }
 }
