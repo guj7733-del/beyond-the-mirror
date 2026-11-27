@@ -6,9 +6,25 @@ import video5 from '../../Videos/5.mp4?url';
 import video6 from '../../Videos/6.mp4?url';
 import video7 from '../../Videos/7.mp4?url';
 import video8 from '../../Videos/8.mp4?url';
+import video9 from '../../Videos/9.mp4?url';
+import video10 from '../../Videos/10.mp4?url';
+import video11 from '../../Videos/11.mp4?url';
+import video12 from '../../Videos/12.mp4?url';
+import video13 from '../../Videos/13.mp4?url';
+import video14 from '../../Videos/14.mp4?url';
+import video15 from '../../Videos/15.mp4?url';
+import video16 from '../../Videos/16.mp4?url';
+import video17 from '../../Videos/17.mp4?url';
+import video18 from '../../Videos/18.mp4?url';
+import video19 from '../../Videos/19.mp4?url';
+import video20 from '../../Videos/20.mp4?url';
+import video21 from '../../Videos/21.mp4?url';
+import video22 from '../../Videos/22.mp4?url';
+import video23 from '../../Videos/23.mp4?url';
+import video24 from '../../Videos/24.mp4?url';
 
-const VIDEO_URLS = [video1, video2, video3, video4, video5, video6, video7, video8];
-const CACHE_NAME = 'beyond-the-mirror-videos-v1';
+const VIDEO_URLS = [video1, video2, video3, video4, video5, video6, video7, video8, video9, video10, video11, video12, video13, video14, video15, video16, video17, video18, video19, video20, video21, video22, video23, video24];
+const CACHE_NAME = 'beyond-the-mirror-videos-v2';
 export const VIDEO_COUNT = VIDEO_URLS.length;
 
 async function readMp4(response: Response): Promise<Blob> {
